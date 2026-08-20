@@ -2,7 +2,17 @@ import requests
 import pandas as pd
 from datetime import datetime, timezone
 
+import os
+import requests
+import pandas as pd
+from datetime import datetime, timezone
+
 from config import TWELVE_DATA_API_KEY
+
+print("========== API KEY DEBUG ==========")
+print("ENV EXISTS:", bool(os.getenv("TWELVE_DATA_API_KEY")))
+print("CONFIG EXISTS:", bool(TWELVE_DATA_API_KEY))
+print("===================================")
 
 
 URL = "https://api.twelvedata.com/time_series"
