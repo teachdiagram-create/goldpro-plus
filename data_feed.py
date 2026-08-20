@@ -2,38 +2,20 @@ import requests
 import pandas as pd
 from datetime import datetime, timezone
 
-from config import (
-    TWELVE_DATA_API_KEY,
-    SYMBOL,
-    TREND_TIMEFRAME,
-    ENTRY_TIMEFRAME,
-    CANDLE_LIMIT_5M,
-    CANDLE_LIMIT_1M,
-)
+from config import TWELVE_DATA_API_KEY
 
-
-# =========================================================
-# GOLDPRO+ DATA FEED
-# =========================================================
 
 URL = "https://api.twelvedata.com/time_series"
 
 
-# =========================================================
-# GET MARKET DATA
-# =========================================================
-
-def get_market_data(symbol, interval, outputsize):
+def get_market_data(symbol, interval, outputsize=200):
     """
-    دریافت OHLC از Twelve Data
-    فقط کندل‌های بسته‌شده را برمی‌گرداند.
+    دریافت کندل‌های بازار از Twelve Data
+    فقط کندل‌های بسته‌شده برگردانده می‌شوند.
     """
 
     if not TWELVE_DATA_API_KEY:
-        print(
-            "[DATA] ERROR: "
-            "TWELVE_DATA_API_KEY is missing"
-        )
+        print("❌ TWELVE_DATA_API_KEY is missing")
         return None
 
     params = {
@@ -45,66 +27,39 @@ def get_market_data(symbol, interval, outputsize):
     }
 
     try:
-
         response = requests.get(
             URL,
             params=params,
             timeout=30
         )
 
-        response.raise_for_status()
-
         data = response.json()
 
-        # -------------------------------------------------
-        # API ERROR
-        # -------------------------------------------------
-
         if data.get("status") == "error":
-
             print(
-                f"[DATA] "
-                f"{symbol} {interval} API error:",
-                data
+                f"[{symbol} {interval}] "
+                f"Twelve Data error: {data}"
             )
-
             return None
-
-        # -------------------------------------------------
-        # DATA CHECK
-        # -------------------------------------------------
 
         if "values" not in data:
-
             print(
-                f"[DATA] "
-                f"{symbol} {interval} "
-                f"missing values:",
-                data
+                f"[{symbol} {interval}] "
+                f"No values returned: {data}"
             )
-
             return None
 
-        # -------------------------------------------------
-        # DATAFRAME
-        # -------------------------------------------------
-
-        df = pd.DataFrame(
-            data["values"]
-        )
+        df = pd.DataFrame(data["values"])
 
         if df.empty:
-
             print(
-                f"[DATA] "
-                f"{symbol} {interval} "
-                f"empty dataframe"
+                f"[{symbol} {interval}] "
+                "Empty dataframe"
             )
-
             return None
 
         # -------------------------------------------------
-        # TIME
+        # DATETIME
         # -------------------------------------------------
 
         df["datetime"] = pd.to_datetime(
@@ -123,7 +78,6 @@ def get_market_data(symbol, interval, outputsize):
             "low",
             "close"
         ]:
-
             df[column] = pd.to_numeric(
                 df[column],
                 errors="coerce"
@@ -134,7 +88,6 @@ def get_market_data(symbol, interval, outputsize):
         # -------------------------------------------------
 
         if "volume" in df.columns:
-
             df["volume"] = pd.to_numeric(
                 df["volume"],
                 errors="coerce"
@@ -156,15 +109,9 @@ def get_market_data(symbol, interval, outputsize):
 
         df = df.sort_values(
             "datetime"
-        )
-
-        df = df.reset_index(
+        ).reset_index(
             drop=True
         )
-
-        # -------------------------------------------------
-        # RENAME TIME
-        # -------------------------------------------------
 
         df.rename(
             columns={
@@ -181,50 +128,30 @@ def get_market_data(symbol, interval, outputsize):
             datetime.now(timezone.utc)
         )
 
-        if interval.endswith("min"):
+        minutes = _interval_to_minutes(
+            interval
+        )
 
-            try:
+        if minutes is not None:
 
-                minutes = int(
-                    interval.replace(
-                        "min",
-                        ""
-                    )
+            cutoff = (
+                now
+                - pd.Timedelta(
+                    minutes=minutes
                 )
-
-                cutoff = (
-                    now
-                    - pd.Timedelta(
-                        minutes=minutes
-                    )
-                )
-
-                df = df[
-                    df["time"] <= cutoff
-                ].reset_index(
-                    drop=True
-                )
-
-            except ValueError:
-
-                print(
-                    f"[DATA] "
-                    f"Invalid interval: "
-                    f"{interval}"
-                )
-
-        # -------------------------------------------------
-        # FINAL CHECK
-        # -------------------------------------------------
-
-        if df.empty:
-
-            print(
-                f"[DATA] "
-                f"{symbol} {interval} "
-                f"no CLOSED candles"
             )
 
+            df = df[
+                df["time"] <= cutoff
+            ].reset_index(
+                drop=True
+            )
+
+        if df.empty:
+            print(
+                f"[{symbol} {interval}] "
+                "No CLOSED candles available"
+            )
             return None
 
         # -------------------------------------------------
@@ -234,16 +161,14 @@ def get_market_data(symbol, interval, outputsize):
         latest = df.iloc[-1]
 
         print(
-            f"[DATA] "
-            f"{symbol} {interval} "
-            f"Latest CLOSED: "
+            f"[{symbol} {interval}] "
+            f"Latest CLOSED candle: "
             f"{latest['time']}"
         )
 
         print(
-            f"[DATA] "
-            f"{symbol} {interval} "
-            f"Close: "
+            f"[{symbol} {interval}] "
+            f"Latest CLOSED close: "
             f"{latest['close']}"
         )
 
@@ -252,10 +177,8 @@ def get_market_data(symbol, interval, outputsize):
     except requests.RequestException as exc:
 
         print(
-            f"[DATA] "
-            f"{symbol} {interval} "
-            f"Connection error:",
-            exc
+            f"[{symbol} {interval}] "
+            f"Connection error: {exc}"
         )
 
         return None
@@ -263,61 +186,88 @@ def get_market_data(symbol, interval, outputsize):
     except Exception as exc:
 
         print(
-            f"[DATA] "
-            f"{symbol} {interval} "
-            f"Unexpected error:",
-            exc
+            f"[{symbol} {interval}] "
+            f"Data processing error: {exc}"
         )
 
         return None
 
 
-# =========================================================
-# 5 MINUTE TREND DATA
-# =========================================================
+def _interval_to_minutes(interval):
+    """
+    تبدیل interval های Twelve Data
+    مثل 1min / 5min / 15min به دقیقه.
+    """
 
-def get_trend_data():
+    if not interval:
+        return None
 
-    return get_market_data(
-        SYMBOL,
-        TREND_TIMEFRAME,
-        CANDLE_LIMIT_5M
-    )
+    interval = str(interval).lower().strip()
 
+    if interval.endswith("min"):
 
-# =========================================================
-# 1 MINUTE ENTRY DATA
-# =========================================================
+        try:
+            return int(
+                interval.replace(
+                    "min",
+                    ""
+                )
+            )
 
-def get_entry_data():
+        except ValueError:
+            return None
 
-    return get_market_data(
-        SYMBOL,
-        ENTRY_TIMEFRAME,
-        CANDLE_LIMIT_1M
-    )
+    return None
 
 
 # =========================================================
 # GOLD DATA
 # =========================================================
 
-def get_gold_data():
+def get_gold_1m(
+    outputsize=200
+):
+    """
+    داده 1 دقیقه‌ای طلا
+    برای پیدا کردن Entry
+    """
 
-    df5 = get_trend_data()
+    return get_market_data(
+        "XAU/USD",
+        "1min",
+        outputsize
+    )
 
-    df1 = get_entry_data()
 
-    if df5 is None:
+def get_gold_5m(
+    outputsize=200
+):
+    """
+    داده 5 دقیقه‌ای طلا
+    برای تعیین Trend
+    """
 
-        print(
-            "[DATA] 5M data unavailable"
-        )
+    return get_market_data(
+        "XAU/USD",
+        "5min",
+        outputsize
+    )
 
-    if df1 is None:
 
-        print(
-            "[DATA] 1M data unavailable"
-        )
+# =========================================================
+# GENERIC GOLD
+# =========================================================
 
-    return df5, df1
+def get_gold_data(
+    interval="1min",
+    outputsize=200
+):
+    """
+    دریافت داده طلا با تایم‌فریم دلخواه.
+    """
+
+    return get_market_data(
+        "XAU/USD",
+        interval,
+        outputsize
+    )
