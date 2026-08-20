@@ -1,72 +1,346 @@
+# =========================================================
+# GoldPro+ Data Feed V2
+#
+# Twelve Data
+#
+# 30M Trend  <- built from 15M
+# 15M        <- confirmation
+# 5M         <- entry
+#
+# فقط CLOSED candles
+# دارای CACHE برای کاهش مصرف API
+# =========================================================
+
 import requests
 import pandas as pd
+
 from datetime import datetime, timezone
 
-import os
-import requests
-import pandas as pd
-from datetime import datetime, timezone
 
 from config import TWELVE_DATA_API_KEY
 
-print("========== API KEY DEBUG ==========")
-print("ENV EXISTS:", bool(os.getenv("TWELVE_DATA_API_KEY")))
-print("CONFIG EXISTS:", bool(TWELVE_DATA_API_KEY))
-print("===================================")
 
+# =========================================================
+# TWELVE DATA
+# =========================================================
 
 URL = "https://api.twelvedata.com/time_series"
 
 
-def get_market_data(symbol, interval, outputsize=200):
-    """
-    دریافت کندل‌های بازار از Twelve Data
-    فقط کندل‌های بسته‌شده برگردانده می‌شوند.
-    """
+# =========================================================
+# CACHE
+# =========================================================
 
-    if not TWELVE_DATA_API_KEY:
-        print("❌ TWELVE_DATA_API_KEY is missing")
+# ساختار:
+#
+# {
+#     ("XAU/USD", "5min"): {
+#         "data": dataframe,
+#         "time": timestamp
+#     }
+# }
+#
+# هدف:
+# جلوگیری از درخواست‌های تکراری Twelve Data
+# =========================================================
+
+_DATA_CACHE = {}
+
+
+# =========================================================
+# CACHE TTL
+# =========================================================
+
+CACHE_TTL = {
+    "1min": 50,
+    "5min": 240,
+    "15min": 840,
+    "30min": 1680,
+}
+
+
+# =========================================================
+# DEBUG
+# =========================================================
+
+DEBUG = True
+
+
+# =========================================================
+# INTERVAL TO MINUTES
+# =========================================================
+
+def _interval_to_minutes(interval):
+
+    if not interval:
         return None
 
-    params = {
-        "symbol": symbol,
-        "interval": interval,
-        "outputsize": outputsize,
-        "timezone": "UTC",
-        "apikey": TWELVE_DATA_API_KEY,
+    interval = str(
+        interval
+    ).lower().strip()
+
+    if interval.endswith("min"):
+
+        try:
+
+            return int(
+                interval.replace(
+                    "min",
+                    ""
+                )
+            )
+
+        except ValueError:
+
+            return None
+
+    return None
+
+
+# =========================================================
+# CACHE CHECK
+# =========================================================
+
+def _get_cached_data(
+    symbol,
+    interval
+):
+
+    key = (
+        symbol,
+        interval
+    )
+
+    cached = _DATA_CACHE.get(
+        key
+    )
+
+    if cached is None:
+        return None
+
+    saved_at = cached.get(
+        "saved_at"
+    )
+
+    dataframe = cached.get(
+        "data"
+    )
+
+    if (
+        saved_at is None
+        or dataframe is None
+    ):
+        return None
+
+    ttl = CACHE_TTL.get(
+        interval,
+        60
+    )
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    age = (
+        now - saved_at
+    ).total_seconds()
+
+    if age < ttl:
+
+        if DEBUG:
+
+            print(
+                f"[{symbol} {interval}] "
+                f"Using cached data "
+                f"({age:.0f}s old)"
+            )
+
+        return dataframe.copy()
+
+    return None
+
+
+# =========================================================
+# CACHE SAVE
+# =========================================================
+
+def _save_cached_data(
+    symbol,
+    interval,
+    df
+):
+
+    key = (
+        symbol,
+        interval
+    )
+
+    _DATA_CACHE[key] = {
+
+        "saved_at":
+            datetime.now(
+                timezone.utc
+            ),
+
+        "data":
+            df.copy()
     }
 
+
+# =========================================================
+# FETCH MARKET DATA
+# =========================================================
+
+def get_market_data(
+    symbol,
+    interval,
+    outputsize=200
+):
+    """
+    دریافت داده بازار از Twelve Data.
+
+    ویژگی‌ها:
+
+    - فقط CLOSED candles
+    - Cache
+    - تبدیل OHLC به عدد
+    - مرتب‌سازی زمانی
+    - مدیریت خطای API
+    """
+
+    # -----------------------------------------------------
+    # API KEY
+    # -----------------------------------------------------
+
+    if not TWELVE_DATA_API_KEY:
+
+        print(
+            "❌ TWELVE_DATA_API_KEY is missing"
+        )
+
+        return None
+
+
+    # -----------------------------------------------------
+    # CACHE
+    # -----------------------------------------------------
+
+    cached = _get_cached_data(
+        symbol,
+        interval
+    )
+
+    if cached is not None:
+
+        return cached
+
+
+    # -----------------------------------------------------
+    # REQUEST
+    # -----------------------------------------------------
+
+    print(
+        f"[{symbol} {interval}] "
+        f"Requesting Twelve Data..."
+    )
+
+
+    params = {
+
+        "symbol":
+            symbol,
+
+        "interval":
+            interval,
+
+        "outputsize":
+            outputsize,
+
+        "timezone":
+            "UTC",
+
+        "apikey":
+            TWELVE_DATA_API_KEY,
+    }
+
+
     try:
+
         response = requests.get(
             URL,
             params=params,
             timeout=30
         )
 
+
+        # -------------------------------------------------
+        # HTTP CHECK
+        # -------------------------------------------------
+
+        if response.status_code != 200:
+
+            print(
+                f"[{symbol} {interval}] "
+                f"HTTP error: "
+                f"{response.status_code}"
+            )
+
+            return None
+
+
         data = response.json()
 
-        if data.get("status") == "error":
+
+        # -------------------------------------------------
+        # TWELVE DATA ERROR
+        # -------------------------------------------------
+
+        if data.get(
+            "status"
+        ) == "error":
+
             print(
                 f"[{symbol} {interval}] "
-                f"Twelve Data error: {data}"
+                f"Twelve Data error: "
+                f"{data}"
             )
+
             return None
+
+
+        # -------------------------------------------------
+        # VALUES CHECK
+        # -------------------------------------------------
 
         if "values" not in data:
+
             print(
                 f"[{symbol} {interval}] "
-                f"No values returned: {data}"
+                f"No values returned: "
+                f"{data}"
             )
+
             return None
 
-        df = pd.DataFrame(data["values"])
+
+        # -------------------------------------------------
+        # DATAFRAME
+        # -------------------------------------------------
+
+        df = pd.DataFrame(
+            data["values"]
+        )
+
 
         if df.empty:
+
             print(
                 f"[{symbol} {interval}] "
-                "Empty dataframe"
+                f"Empty dataframe"
             )
+
             return None
+
 
         # -------------------------------------------------
         # DATETIME
@@ -78,6 +352,7 @@ def get_market_data(symbol, interval, outputsize=200):
             utc=True
         )
 
+
         # -------------------------------------------------
         # OHLC
         # -------------------------------------------------
@@ -88,20 +363,35 @@ def get_market_data(symbol, interval, outputsize=200):
             "low",
             "close"
         ]:
+
+            if column not in df.columns:
+
+                print(
+                    f"[{symbol} {interval}] "
+                    f"Missing column: "
+                    f"{column}"
+                )
+
+                return None
+
+
             df[column] = pd.to_numeric(
                 df[column],
                 errors="coerce"
             )
+
 
         # -------------------------------------------------
         # VOLUME
         # -------------------------------------------------
 
         if "volume" in df.columns:
+
             df["volume"] = pd.to_numeric(
                 df["volume"],
                 errors="coerce"
             )
+
 
         # -------------------------------------------------
         # CLEAN
@@ -117,11 +407,13 @@ def get_market_data(symbol, interval, outputsize=200):
             ]
         )
 
+
         df = df.sort_values(
             "datetime"
         ).reset_index(
             drop=True
         )
+
 
         df.rename(
             columns={
@@ -130,19 +422,24 @@ def get_market_data(symbol, interval, outputsize=200):
             inplace=True
         )
 
-        # -------------------------------------------------
-        # REMOVE CURRENT / FORMING CANDLE
-        # -------------------------------------------------
 
-        now = pd.Timestamp(
-            datetime.now(timezone.utc)
-        )
+        # -------------------------------------------------
+        # REMOVE FORMING CANDLE
+        # -------------------------------------------------
 
         minutes = _interval_to_minutes(
             interval
         )
 
+
         if minutes is not None:
+
+            now = pd.Timestamp(
+                datetime.now(
+                    timezone.utc
+                )
+            )
+
 
             cutoff = (
                 now
@@ -151,24 +448,34 @@ def get_market_data(symbol, interval, outputsize=200):
                 )
             )
 
+
             df = df[
                 df["time"] <= cutoff
             ].reset_index(
                 drop=True
             )
 
-        if df.empty:
-            print(
-                f"[{symbol} {interval}] "
-                "No CLOSED candles available"
-            )
-            return None
 
         # -------------------------------------------------
-        # LOG
+        # EMPTY CHECK
+        # -------------------------------------------------
+
+        if df.empty:
+
+            print(
+                f"[{symbol} {interval}] "
+                f"No CLOSED candles available"
+            )
+
+            return None
+
+
+        # -------------------------------------------------
+        # LATEST CANDLE
         # -------------------------------------------------
 
         latest = df.iloc[-1]
+
 
         print(
             f"[{symbol} {interval}] "
@@ -176,86 +483,65 @@ def get_market_data(symbol, interval, outputsize=200):
             f"{latest['time']}"
         )
 
+
         print(
             f"[{symbol} {interval}] "
             f"Latest CLOSED close: "
             f"{latest['close']}"
         )
 
-        return df
+
+        # -------------------------------------------------
+        # SAVE CACHE
+        # -------------------------------------------------
+
+        _save_cached_data(
+            symbol,
+            interval,
+            df
+        )
+
+
+        return df.copy()
+
+
+    # =====================================================
+    # REQUEST ERROR
+    # =====================================================
 
     except requests.RequestException as exc:
 
         print(
             f"[{symbol} {interval}] "
-            f"Connection error: {exc}"
+            f"Connection error: "
+            f"{exc}"
         )
 
         return None
+
+
+    # =====================================================
+    # GENERAL ERROR
+    # =====================================================
 
     except Exception as exc:
 
         print(
             f"[{symbol} {interval}] "
-            f"Data processing error: {exc}"
+            f"Data processing error: "
+            f"{exc}"
         )
 
         return None
 
 
-def _interval_to_minutes(interval):
-    """
-    تبدیل interval های Twelve Data
-    مثل 1min / 5min / 15min به دقیقه.
-    """
-
-    if not interval:
-        return None
-
-    interval = str(interval).lower().strip()
-
-    if interval.endswith("min"):
-
-        try:
-            return int(
-                interval.replace(
-                    "min",
-                    ""
-                )
-            )
-
-        except ValueError:
-            return None
-
-    return None
-
-
 # =========================================================
-# GOLD DATA
+# GOLD 5M
 # =========================================================
-
-def get_gold_1m(
-    outputsize=200
-):
-    """
-    داده 1 دقیقه‌ای طلا
-    برای پیدا کردن Entry
-    """
-
-    return get_market_data(
-        "XAU/USD",
-        "1min",
-        outputsize
-    )
-
 
 def get_gold_5m(
     outputsize=200
 ):
-    """
-    داده 5 دقیقه‌ای طلا
-    برای تعیین Trend
-    """
 
     return get_market_data(
         "XAU/USD",
@@ -265,19 +551,97 @@ def get_gold_5m(
 
 
 # =========================================================
-# GENERIC GOLD
+# GOLD 15M
+# =========================================================
+
+def get_gold_15m(
+    outputsize=200
+):
+
+    return get_market_data(
+        "XAU/USD",
+        "15min",
+        outputsize
+    )
+
+
+# =========================================================
+# GOLD GENERIC
 # =========================================================
 
 def get_gold_data(
-    interval="1min",
+    interval="5min",
     outputsize=200
 ):
-    """
-    دریافت داده طلا با تایم‌فریم دلخواه.
-    """
 
     return get_market_data(
         "XAU/USD",
         interval,
         outputsize
+    )
+
+
+# =========================================================
+# CACHE STATUS
+# =========================================================
+
+def print_cache_status():
+
+    print(
+        "========== DATA CACHE =========="
+    )
+
+
+    if not _DATA_CACHE:
+
+        print(
+            "Cache is empty."
+        )
+
+        return
+
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+
+    for key, value in _DATA_CACHE.items():
+
+        symbol, interval = key
+
+        saved_at = value.get(
+            "saved_at"
+        )
+
+        if saved_at is None:
+            continue
+
+
+        age = (
+            now - saved_at
+        ).total_seconds()
+
+
+        df = value.get(
+            "data"
+        )
+
+
+        rows = (
+            len(df)
+            if df is not None
+            else 0
+        )
+
+
+        print(
+            f"{symbol} {interval} | "
+            f"Age: {age:.0f}s | "
+            f"Rows: {rows}"
+        )
+
+
+    print(
+        "================================"
     )
