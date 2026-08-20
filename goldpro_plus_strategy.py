@@ -1,27 +1,10 @@
 # =========================================================
 # GoldPro+ Strategy V1
 #
-# 5M = TREND
-# 1M = ENTRY
+# 5M  -> TREND ONLY
+# 1M  -> ENTRY
 #
-# EMA20 / EMA50:
-# ONLY define trend direction.
-#
-# BUY:
-#   1) 5M EMA20 > EMA50
-#   2) 1M RSI was below 30 and crossed back above 30
-#   3) Last 1M candle is bullish
-#   4) Price is near 1M OR 5M support
-#   5) Bullish RSI divergence = +10 bonus
-#
-# SELL:
-#   1) 5M EMA20 < EMA50
-#   2) 1M RSI was above 70 and crossed back below 70
-#   3) Last 1M candle is bearish
-#   4) Price is near 1M OR 5M resistance
-#   5) Bearish RSI divergence = +10 bonus
-#
-# Minimum score = 70
+# EMA20 / EMA50 فقط جهت روند را مشخص می‌کنند.
 # =========================================================
 
 from indicators import add_indicators
@@ -36,18 +19,12 @@ MIN_SCORE = 70
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 70
 
-SR_LOOKBACK_1M = 20
-SR_LOOKBACK_5M = 20
-
+SR_LOOKBACK = 20
 SR_ATR_DISTANCE = 1.0
-
-SL_ATR_MULTIPLIER = 1.5
-TP1_ATR_MULTIPLIER = 2.0
-TP2_ATR_MULTIPLIER = 3.0
 
 
 # =========================================================
-# BASIC HELPERS
+# HELPERS
 # =========================================================
 
 def _safe_float(value, default=0.0):
@@ -66,37 +43,42 @@ def _previous(df):
 
 
 def _prepare(df):
+
     if df is None or df.empty:
         return None
 
     try:
-        result = add_indicators(df.copy())
-
-        if result is None or result.empty:
-            return None
-
-        return result
-
+        return add_indicators(
+            df.copy()
+        )
     except Exception as exc:
-        print("[GoldPro+] Indicator error:", exc)
+        print(
+            "[GoldPro+] Indicator error:",
+            exc
+        )
         return None
 
 
 # =========================================================
 # 5M TREND
 #
-# EMA20 / EMA50 ONLY DEFINE TREND
+# EMA20 / EMA50 ONLY
 # =========================================================
 
-def _get_trend_5m(df5):
+def get_trend(df5):
 
     if df5 is None or len(df5) < 2:
         return "NONE"
 
     last = _latest(df5)
 
-    ema20 = _safe_float(last.get("EMA20"))
-    ema50 = _safe_float(last.get("EMA50"))
+    ema20 = _safe_float(
+        last.get("EMA20")
+    )
+
+    ema50 = _safe_float(
+        last.get("EMA50")
+    )
 
     if ema20 > ema50:
         return "BUY"
@@ -191,12 +173,18 @@ def _bullish_candle(df1):
         return False
 
     last = _latest(df1)
-    previous = _previous(df1)
+    prev = _previous(df1)
 
-    close = _safe_float(last.get("close"))
-    open_price = _safe_float(last.get("open"))
+    close = _safe_float(
+        last.get("close")
+    )
+
+    open_price = _safe_float(
+        last.get("open")
+    )
+
     previous_close = _safe_float(
-        previous.get("close")
+        prev.get("close")
     )
 
     return (
@@ -215,12 +203,18 @@ def _bearish_candle(df1):
         return False
 
     last = _latest(df1)
-    previous = _previous(df1)
+    prev = _previous(df1)
 
-    close = _safe_float(last.get("close"))
-    open_price = _safe_float(last.get("open"))
+    close = _safe_float(
+        last.get("close")
+    )
+
+    open_price = _safe_float(
+        last.get("open")
+    )
+
     previous_close = _safe_float(
-        previous.get("close")
+        prev.get("close")
     )
 
     return (
@@ -233,13 +227,13 @@ def _bearish_candle(df1):
 # SUPPORT
 # =========================================================
 
-def _find_support(df, lookback):
+def _find_support(df):
 
     if df is None or df.empty:
         return None
 
     count = min(
-        int(lookback),
+        SR_LOOKBACK,
         len(df)
     )
 
@@ -247,9 +241,9 @@ def _find_support(df, lookback):
         return None
 
     try:
-        value = df.iloc[-count:]["low"].min()
-        return _safe_float(value, None)
-
+        return float(
+            df.iloc[-count:]["low"].min()
+        )
     except Exception:
         return None
 
@@ -258,13 +252,13 @@ def _find_support(df, lookback):
 # RESISTANCE
 # =========================================================
 
-def _find_resistance(df, lookback):
+def _find_resistance(df):
 
     if df is None or df.empty:
         return None
 
     count = min(
-        int(lookback),
+        SR_LOOKBACK,
         len(df)
     )
 
@@ -272,35 +266,38 @@ def _find_resistance(df, lookback):
         return None
 
     try:
-        value = df.iloc[-count:]["high"].max()
-        return _safe_float(value, None)
-
+        return float(
+            df.iloc[-count:]["high"].max()
+        )
     except Exception:
         return None
 
 
 # =========================================================
-# SUPPORT CONTEXT
+# SUPPORT CHECK
 # =========================================================
 
-def _support_context(df1, df5):
+def _near_support(df1):
+
+    last = _latest(df1)
 
     price = _safe_float(
-        _latest(df1).get("close")
+        last.get("close")
     )
 
     atr = _safe_float(
-        _latest(df1).get("ATR")
+        last.get("ATR")
     )
 
-    support1 = _find_support(
-        df1,
-        SR_LOOKBACK_1M
+    support = _find_support(
+        df1
     )
 
-    support5 = _find_support(
-        df5,
-        SR_LOOKBACK_5M
+    if support is None:
+        return False, None
+
+    distance = abs(
+        price - support
     )
 
     max_distance = max(
@@ -308,64 +305,37 @@ def _support_context(df1, df5):
         0.5
     )
 
-    if support1 is not None:
-        distance1 = abs(
-            price - support1
-        )
-    else:
-        distance1 = float("inf")
-
-    if support5 is not None:
-        distance5 = abs(
-            price - support5
-        )
-    else:
-        distance5 = float("inf")
-
-    near1 = (
-        distance1 <= max_distance
+    return (
+        distance <= max_distance,
+        support
     )
-
-    near5 = (
-        distance5 <= max_distance
-    )
-
-    confirmed = (
-        near1 or near5
-    )
-
-    return confirmed, {
-        "support_1m": support1,
-        "support_5m": support5,
-        "distance_to_support_1m": distance1,
-        "distance_to_support_5m": distance5,
-        "near_support_1m": near1,
-        "near_support_5m": near5,
-    }
 
 
 # =========================================================
-# RESISTANCE CONTEXT
+# RESISTANCE CHECK
 # =========================================================
 
-def _resistance_context(df1, df5):
+def _near_resistance(df1):
+
+    last = _latest(df1)
 
     price = _safe_float(
-        _latest(df1).get("close")
+        last.get("close")
     )
 
     atr = _safe_float(
-        _latest(df1).get("ATR")
+        last.get("ATR")
     )
 
-    resistance1 = _find_resistance(
-        df1,
-        SR_LOOKBACK_1M
+    resistance = _find_resistance(
+        df1
     )
 
-    resistance5 = _find_resistance(
-        df5,
-        SR_LOOKBACK_5M
+    if resistance is None:
+        return False, None
+
+    distance = abs(
+        price - resistance
     )
 
     max_distance = max(
@@ -373,126 +343,10 @@ def _resistance_context(df1, df5):
         0.5
     )
 
-    if resistance1 is not None:
-        distance1 = abs(
-            price - resistance1
-        )
-    else:
-        distance1 = float("inf")
-
-    if resistance5 is not None:
-        distance5 = abs(
-            price - resistance5
-        )
-    else:
-        distance5 = float("inf")
-
-    near1 = (
-        distance1 <= max_distance
+    return (
+        distance <= max_distance,
+        resistance
     )
-
-    near5 = (
-        distance5 <= max_distance
-    )
-
-    confirmed = (
-        near1 or near5
-    )
-
-    return confirmed, {
-        "resistance_1m": resistance1,
-        "resistance_5m": resistance5,
-        "distance_to_resistance_1m": distance1,
-        "distance_to_resistance_5m": distance5,
-        "near_resistance_1m": near1,
-        "near_resistance_5m": near5,
-    }
-
-
-# =========================================================
-# BULLISH RSI DIVERGENCE
-# =========================================================
-
-def _bullish_divergence(df1):
-
-    if df1 is None or len(df1) < 10:
-        return False
-
-    recent = df1.iloc[-10:]
-
-    first = recent.iloc[:5]
-    second = recent.iloc[5:]
-
-    try:
-        idx1 = first["low"].idxmin()
-        idx2 = second["low"].idxmin()
-
-        price_low_1 = _safe_float(
-            first.loc[idx1, "low"]
-        )
-
-        price_low_2 = _safe_float(
-            second.loc[idx2, "low"]
-        )
-
-        rsi_low_1 = _safe_float(
-            first.loc[idx1, "RSI"]
-        )
-
-        rsi_low_2 = _safe_float(
-            second.loc[idx2, "RSI"]
-        )
-
-        return (
-            price_low_2 < price_low_1
-            and rsi_low_2 > rsi_low_1
-        )
-
-    except Exception:
-        return False
-
-
-# =========================================================
-# BEARISH RSI DIVERGENCE
-# =========================================================
-
-def _bearish_divergence(df1):
-
-    if df1 is None or len(df1) < 10:
-        return False
-
-    recent = df1.iloc[-10:]
-
-    first = recent.iloc[:5]
-    second = recent.iloc[5:]
-
-    try:
-        idx1 = first["high"].idxmax()
-        idx2 = second["high"].idxmax()
-
-        price_high_1 = _safe_float(
-            first.loc[idx1, "high"]
-        )
-
-        price_high_2 = _safe_float(
-            second.loc[idx2, "high"]
-        )
-
-        rsi_high_1 = _safe_float(
-            first.loc[idx1, "RSI"]
-        )
-
-        rsi_high_2 = _safe_float(
-            second.loc[idx2, "RSI"]
-        )
-
-        return (
-            price_high_2 > price_high_1
-            and rsi_high_2 < rsi_high_1
-        )
-
-    except Exception:
-        return False
 
 
 # =========================================================
@@ -502,8 +356,7 @@ def _bearish_divergence(df1):
 def _analyze_buy(df5, df1):
 
     trend_ok = (
-        _get_trend_5m(df5)
-        == "BUY"
+        get_trend(df5) == "BUY"
     )
 
     rsi_ok = _rsi_buy_trigger(
@@ -514,13 +367,8 @@ def _analyze_buy(df5, df1):
         df1
     )
 
-    support_ok, sr = _support_context(
-        df1,
-        df5
-    )
-
-    divergence = _bullish_divergence(
-        df1
+    support_ok, support = (
+        _near_support(df1)
     )
 
     score = 0
@@ -529,34 +377,34 @@ def _analyze_buy(df5, df1):
 
     filters = {}
 
-    # Trend = 20
-    filters["Trend"] = trend_ok
+    # Trend
+    filters["Trend 5M"] = trend_ok
 
     if trend_ok:
-        score += 20
+        score += 30
         reasons.append(
-            "OK: 5M EMA20 > EMA50 trend"
+            "OK: 5M EMA20 > EMA50"
         )
     else:
         reasons.append(
-            "WAIT: 5M EMA trend"
+            "WAIT: 5M bullish trend"
         )
 
-    # RSI = 35
-    filters["RSI Reversal"] = rsi_ok
+    # RSI
+    filters["RSI Reversal 1M"] = rsi_ok
 
     if rsi_ok:
-        score += 35
+        score += 30
         reasons.append(
-            "OK: 1M RSI below 30 -> back above 30"
+            "OK: 1M RSI below 30 -> above 30"
         )
     else:
         reasons.append(
             "WAIT: 1M RSI reversal"
         )
 
-    # Candle = 20
-    filters["1M Candle"] = candle_ok
+    # Candle
+    filters["Candle 1M"] = candle_ok
 
     if candle_ok:
         score += 20
@@ -568,38 +416,24 @@ def _analyze_buy(df5, df1):
             "WAIT: bullish 1M candle"
         )
 
-    # Support = 15
-    filters["Support"] = support_ok
+    # Support
+    filters["Support 1M"] = support_ok
 
     if support_ok:
-        score += 15
+        score += 20
         reasons.append(
-            "OK: 1M/5M support"
+            "OK: price near 1M support"
         )
     else:
         reasons.append(
-            "WAIT: 1M/5M support"
-        )
-
-    # Divergence = 10 bonus
-    filters["RSI Divergence"] = divergence
-
-    if divergence:
-        score += 10
-        reasons.append(
-            "BONUS: bullish RSI divergence"
-        )
-    else:
-        reasons.append(
-            "No bullish RSI divergence"
+            "WAIT: 1M support"
         )
 
     return (
         score,
         filters,
         reasons,
-        sr,
-        divergence
+        support
     )
 
 
@@ -610,8 +444,7 @@ def _analyze_buy(df5, df1):
 def _analyze_sell(df5, df1):
 
     trend_ok = (
-        _get_trend_5m(df5)
-        == "SELL"
+        get_trend(df5) == "SELL"
     )
 
     rsi_ok = _rsi_sell_trigger(
@@ -622,13 +455,8 @@ def _analyze_sell(df5, df1):
         df1
     )
 
-    resistance_ok, sr = _resistance_context(
-        df1,
-        df5
-    )
-
-    divergence = _bearish_divergence(
-        df1
+    resistance_ok, resistance = (
+        _near_resistance(df1)
     )
 
     score = 0
@@ -637,34 +465,34 @@ def _analyze_sell(df5, df1):
 
     filters = {}
 
-    # Trend = 20
-    filters["Trend"] = trend_ok
+    # Trend
+    filters["Trend 5M"] = trend_ok
 
     if trend_ok:
-        score += 20
+        score += 30
         reasons.append(
-            "OK: 5M EMA20 < EMA50 trend"
+            "OK: 5M EMA20 < EMA50"
         )
     else:
         reasons.append(
-            "WAIT: 5M EMA trend"
+            "WAIT: 5M bearish trend"
         )
 
-    # RSI = 35
-    filters["RSI Reversal"] = rsi_ok
+    # RSI
+    filters["RSI Reversal 1M"] = rsi_ok
 
     if rsi_ok:
-        score += 35
+        score += 30
         reasons.append(
-            "OK: 1M RSI above 70 -> back below 70"
+            "OK: 1M RSI above 70 -> below 70"
         )
     else:
         reasons.append(
             "WAIT: 1M RSI reversal"
         )
 
-    # Candle = 20
-    filters["1M Candle"] = candle_ok
+    # Candle
+    filters["Candle 1M"] = candle_ok
 
     if candle_ok:
         score += 20
@@ -676,304 +504,29 @@ def _analyze_sell(df5, df1):
             "WAIT: bearish 1M candle"
         )
 
-    # Resistance = 15
-    filters["Resistance"] = resistance_ok
+    # Resistance
+    filters["Resistance 1M"] = resistance_ok
 
     if resistance_ok:
-        score += 15
+        score += 20
         reasons.append(
-            "OK: 1M/5M resistance"
+            "OK: price near 1M resistance"
         )
     else:
         reasons.append(
-            "WAIT: 1M/5M resistance"
-        )
-
-    # Divergence = 10 bonus
-    filters["RSI Divergence"] = divergence
-
-    if divergence:
-        score += 10
-        reasons.append(
-            "BONUS: bearish RSI divergence"
-        )
-    else:
-        reasons.append(
-            "No bearish RSI divergence"
+            "WAIT: 1M resistance"
         )
 
     return (
         score,
         filters,
         reasons,
-        sr,
-        divergence
+        resistance
     )
 
 
 # =========================================================
-# QUALITY
-# =========================================================
-
-def _quality(score):
-
-    if score >= 85:
-        return "STRONG"
-
-    if score >= MIN_SCORE:
-        return "NORMAL"
-
-    return "WEAK"
-
-
-# =========================================================
-# COMMON DATA
-# =========================================================
-
-def _common_data(df1):
-
-    last = _latest(df1)
-
-    return {
-        "price": _safe_float(
-            last.get("close")
-        ),
-
-        "rsi": _safe_float(
-            last.get("RSI")
-        ),
-
-        "adx": _safe_float(
-            last.get("ADX")
-        ),
-
-        "atr": _safe_float(
-            last.get("ATR")
-        ),
-
-        "ema20": _safe_float(
-            last.get("EMA20")
-        ),
-
-        "ema50": _safe_float(
-            last.get("EMA50")
-        ),
-
-        "macd": _safe_float(
-            last.get("MACD")
-        ),
-
-        "macd_signal": _safe_float(
-            last.get("MACD_SIGNAL")
-        ),
-
-        "time": str(
-            last.get("time")
-        )
-    }
-
-
-# =========================================================
-# NO SIGNAL
-# =========================================================
-
-def _build_no_signal(
-    trend,
-    score,
-    reasons,
-    filters,
-    data,
-    sr,
-    divergence
-):
-
-    result = {
-        "signal": "NO SIGNAL",
-        "stage": "1M",
-        "trend": trend,
-
-        "score": score,
-        "confidence": score,
-
-        "quality": _quality(
-            score
-        ),
-
-        "reasons": [
-            f"Score: {score}/100"
-        ] + reasons,
-
-        "filters": filters,
-
-        "divergence": divergence
-    }
-
-    result.update(data)
-
-    if trend == "BUY":
-
-        result["support"] = sr.get(
-            "support_1m"
-        )
-
-        result["support_5m"] = sr.get(
-            "support_5m"
-        )
-
-    elif trend == "SELL":
-
-        result["resistance"] = sr.get(
-            "resistance_1m"
-        )
-
-        result["resistance_5m"] = sr.get(
-            "resistance_5m"
-        )
-
-    return result
-
-
-# =========================================================
-# BUILD SIGNAL
-# =========================================================
-
-def _build_signal(
-    signal,
-    trend,
-    score,
-    reasons,
-    filters,
-    data,
-    sr,
-    divergence
-):
-
-    price = data["price"]
-    atr = data["atr"]
-
-    if atr <= 0:
-
-        return _build_no_signal(
-            trend,
-            score,
-            reasons + [
-                "WAIT: ATR unavailable"
-            ],
-            filters,
-            data,
-            sr,
-            divergence
-        )
-
-    if signal == "BUY":
-
-        sl = (
-            price
-            - atr * SL_ATR_MULTIPLIER
-        )
-
-        tp1 = (
-            price
-            + atr * TP1_ATR_MULTIPLIER
-        )
-
-        tp2 = (
-            price
-            + atr * TP2_ATR_MULTIPLIER
-        )
-
-    else:
-
-        sl = (
-            price
-            + atr * SL_ATR_MULTIPLIER
-        )
-
-        tp1 = (
-            price
-            - atr * TP1_ATR_MULTIPLIER
-        )
-
-        tp2 = (
-            price
-            - atr * TP2_ATR_MULTIPLIER
-        )
-
-    result = {
-        "signal": signal,
-
-        "stage": "1M",
-
-        "trend": trend,
-
-        "score": score,
-
-        "confidence": score,
-
-        "quality": _quality(
-            score
-        ),
-
-        "price": price,
-
-        "sl": sl,
-
-        "tp1": tp1,
-
-        "tp2": tp2,
-
-        "rsi": data["rsi"],
-
-        "adx": data["adx"],
-
-        "atr": atr,
-
-        "ema20": data["ema20"],
-
-        "ema50": data["ema50"],
-
-        "macd": data["macd"],
-
-        "macd_signal": data["macd_signal"],
-
-        "divergence": divergence,
-
-        "filters": filters,
-
-        "time": data["time"],
-
-        "reasons": [
-            f"Score: {score}/100"
-        ] + reasons + [
-            f"FINAL {signal} SIGNAL"
-        ]
-    }
-
-    if signal == "BUY":
-
-        result["support"] = sr.get(
-            "support_1m"
-        )
-
-        result["support_5m"] = sr.get(
-            "support_5m"
-        )
-
-    else:
-
-        result["resistance"] = sr.get(
-            "resistance_1m"
-        )
-
-        result["resistance_5m"] = sr.get(
-            "resistance_5m"
-        )
-
-    return result
-
-
-# =========================================================
-# MAIN
+# MAIN GOLDPRO+ SIGNAL
 # =========================================================
 
 def generate_goldpro_plus_signal(
@@ -1008,19 +561,12 @@ def generate_goldpro_plus_signal(
     # PREPARE INDICATORS
     # -----------------------------------------------------
 
-    prepared5 = _prepare(
-        df5
-    )
-
-    prepared1 = _prepare(
-        df1
-    )
+    df5 = _prepare(df5)
+    df1 = _prepare(df1)
 
     if (
-        prepared5 is None
-        or prepared1 is None
-        or prepared5.empty
-        or prepared1.empty
+        df5 is None
+        or df1 is None
     ):
 
         return {
@@ -1039,12 +585,30 @@ def generate_goldpro_plus_signal(
     # TREND
     # -----------------------------------------------------
 
-    trend = _get_trend_5m(
-        prepared5
+    trend = get_trend(
+        df5
     )
 
-    data = _common_data(
-        prepared1
+    last = _latest(df1)
+
+    price = _safe_float(
+        last.get("close")
+    )
+
+    rsi = _safe_float(
+        last.get("RSI")
+    )
+
+    atr = _safe_float(
+        last.get("ATR")
+    )
+
+    ema20_5m = _safe_float(
+        df5.iloc[-1].get("EMA20")
+    )
+
+    ema50_5m = _safe_float(
+        df5.iloc[-1].get("EMA50")
     )
 
     # -----------------------------------------------------
@@ -1057,35 +621,157 @@ def generate_goldpro_plus_signal(
             score,
             filters,
             reasons,
-            sr,
-            divergence
+            support
         ) = _analyze_buy(
-            prepared5,
-            prepared1
+            df5,
+            df1
         )
 
         if score >= MIN_SCORE:
 
-            return _build_signal(
-                "BUY",
-                trend,
-                score,
-                reasons,
-                filters,
-                data,
-                sr,
-                divergence
-            )
+            return {
+                "signal": "BUY",
+                "stage": "1M",
+                "trend": trend,
+                "score": score,
+                "confidence": score,
+                "quality": (
+                    "STRONG"
+                    if score >= 85
+                    else "NORMAL"
+                ),
 
-        return _build_no_signal(
-            trend,
+                "price": price,
+                "rsi": rsi,
+                "atr": atr,
+
+                "ema20_5m": ema20_5m,
+                "ema50_5m": ema50_5m,
+
+                "support": support,
+
+                "filters": filters,
+
+                "reasons": (
+                    [f"Score: {score}/100"]
+                    + reasons
+                    + ["FINAL BUY SIGNAL"]
+                ),
+
+                "time": str(
+                    last.get("time")
+                )
+            }
+
+        return {
+            "signal": "NO SIGNAL",
+            "stage": "1M",
+            "trend": trend,
+            "score": score,
+            "confidence": score,
+            "quality": (
+                "STRONG"
+                if score >= 85
+                else "NORMAL"
+                if score >= MIN_SCORE
+                else "WEAK"
+            ),
+            "price": price,
+            "rsi": rsi,
+            "atr": atr,
+            "ema20_5m": ema20_5m,
+            "ema50_5m": ema50_5m,
+            "support": support,
+            "filters": filters,
+            "reasons": (
+                [f"Score: {score}/100"]
+                + reasons
+            ),
+            "time": str(
+                last.get("time")
+            )
+        }
+
+    # -----------------------------------------------------
+    # SELL
+    # -----------------------------------------------------
+
+    if trend == "SELL":
+
+        (
             score,
-            reasons,
             filters,
-            data,
-            sr,
-            divergence
+            reasons,
+            resistance
+        ) = _analyze_sell(
+            df5,
+            df1
         )
+
+        if score >= MIN_SCORE:
+
+            return {
+                "signal": "SELL",
+                "stage": "1M",
+                "trend": trend,
+                "score": score,
+                "confidence": score,
+                "quality": (
+                    "STRONG"
+                    if score >= 85
+                    else "NORMAL"
+                ),
+
+                "price": price,
+                "rsi": rsi,
+                "atr": atr,
+
+                "ema20_5m": ema20_5m,
+                "ema50_5m": ema50_5m,
+
+                "resistance": resistance,
+
+                "filters": filters,
+
+                "reasons": (
+                    [f"Score: {score}/100"]
+                    + reasons
+                    + ["FINAL SELL SIGNAL"]
+                ),
+
+                "time": str(
+                    last.get("time")
+                )
+            }
+
+        return {
+            "signal": "NO SIGNAL",
+            "stage": "1M",
+            "trend": trend,
+            "score": score,
+            "confidence": score,
+            "quality": (
+                "STRONG"
+                if score >= 85
+                else "NORMAL"
+                if score >= MIN_SCORE
+                else "WEAK"
+            ),
+            "price": price,
+            "rsi": rsi,
+            "atr": atr,
+            "ema20_5m": ema20_5m,
+            "ema50_5m": ema50_5m,
+            "resistance": resistance,
+            "filters": filters,
+            "reasons": (
+                [f"Score: {score}/100"]
+                + reasons
+            ),
+            "time": str(
+                last.get("time")
+            )
+        }
 
     # -----------------------------------------------------
     # NO CLEAR TREND
@@ -1098,17 +784,16 @@ def generate_goldpro_plus_signal(
         "score": 0,
         "confidence": 0,
         "quality": "WEAK",
+        "price": price,
+        "rsi": rsi,
+        "atr": atr,
+        "ema20_5m": ema20_5m,
+        "ema50_5m": ema50_5m,
+        "filters": {},
         "reasons": [
-            "5M EMA20 and EMA50 have no clear trend"
+            "WAIT: 5M EMA20 / EMA50 have no clear trend"
         ],
-        "price": data["price"],
-        "rsi": data["rsi"],
-        "adx": data["adx"],
-        "atr": data["atr"],
-        "ema20": data["ema20"],
-        "ema50": data["ema50"],
-        "macd": data["macd"],
-        "macd_signal": data["macd_signal"],
-        "time": data["time"]
+        "time": str(
+            last.get("time")
+        )
     }
-         
