@@ -129,8 +129,10 @@ TP2_ATR_MULTIPLIER = 3.0
 # BOT LOOP
 # ---------------------------------------------------------
 
-CHECK_DELAY_SECONDS = 2
+# هر 60 ثانیه بررسی شود
+CHECK_DELAY_SECONDS = 60
 
+# Entry روی کندل 1 دقیقه‌ای
 CANDLE_MINUTES = 1
 
 
