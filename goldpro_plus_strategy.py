@@ -1074,4 +1074,41 @@ def generate_goldpro_plus_signal(
                 filters,
                 data,
                 sr,
+                divergence
+            )
+
+        return _build_no_signal(
+            trend,
+            score,
+            reasons,
+            filters,
+            data,
+            sr,
+            divergence
+        )
+
+    # -----------------------------------------------------
+    # NO CLEAR TREND
+    # -----------------------------------------------------
+
+    return {
+        "signal": "NO SIGNAL",
+        "stage": "5M",
+        "trend": "NONE",
+        "score": 0,
+        "confidence": 0,
+        "quality": "WEAK",
+        "reasons": [
+            "5M EMA20 and EMA50 have no clear trend"
+        ],
+        "price": data["price"],
+        "rsi": data["rsi"],
+        "adx": data["adx"],
+        "atr": data["atr"],
+        "ema20": data["ema20"],
+        "ema50": data["ema50"],
+        "macd": data["macd"],
+        "macd_signal": data["macd_signal"],
+        "time": data["time"]
+    }
          
