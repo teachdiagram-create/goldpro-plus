@@ -138,13 +138,24 @@ if df1 is None or df1.empty:
         # 5M = TREND
         # 1M = ENTRY
         # =================================================
+# =================================================
+# STRATEGY EXECUTION
+# =================================================
 
-        result = generate_goldpro_plus_signal(
-            df5,
-            df1
-        )
+if STRATEGY_MODE == "SCALPER":
 
-        # =================================================
+    result = generate_scalper_signal(
+        df15,
+        df5,
+        df1
+    )
+
+else:
+
+    result = generate_goldpro_plus_signal(
+        df5,
+        df1
+    ) =================================================
         # RESULT
         # =================================================
 
