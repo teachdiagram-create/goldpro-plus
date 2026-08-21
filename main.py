@@ -1,21 +1,41 @@
-import time
-from datetime import datetime
-
 from config import (
     MARKETS,
-    TREND_TIMEFRAME,
+    STRATEGY_MODE,
     ENTRY_TIMEFRAME,
+    TREND_TIMEFRAME,
     CANDLE_LIMIT_5M,
     CANDLE_LIMIT_1M,
+    CANDLE_LIMIT_15M,
     CHECK_DELAY_SECONDS,
 )
 
 from data_feed import get_market_data
 
-from goldpro_plus_strategy import (
-    generate_goldpro_plus_signal
-)
 
+# =========================================================
+# STRATEGY SELECTOR
+# =========================================================
+
+if STRATEGY_MODE == "SCALPER":
+
+    from scalper_strategy import (
+        generate_scalper_signal
+    )
+
+    print(
+        "🧠 Strategy Loaded: GoldPro+ Scalper V1"
+    )
+
+
+else:
+
+    from goldpro_plus_strategy import (
+        generate_goldpro_plus_signal
+    )
+
+    print(
+        "🧠 Strategy Loaded: GoldPro+ Classic"
+    )
 
 # =========================================================
 # MARKET CHECK
