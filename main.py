@@ -52,49 +52,85 @@ def check_market(symbol):
 
         # =================================================
         # 5M DATA
-        # =================================================
+        # 
+
+# =================================================
+# MARKET DATA
+# =================================================
+
+# -----------------------------
+# 15M DATA (Scalper Trend)
+# -----------------------------
+
+df15 = None
+
+if STRATEGY_MODE == "SCALPER":
+
+    print(
+        f"[{symbol}] Getting 15M trend data..."
+    )
+
+    df15 = get_market_data(
+        symbol,
+        "15min",
+        CANDLE_LIMIT_15M
+    )
+
+    if df15 is None or df15.empty:
 
         print(
-            f"[{symbol}] Getting "
-            f"{TREND_TIMEFRAME} trend data..."
+            f"[{symbol}] No 15M data received"
         )
 
-        df5 = get_market_data(
-            symbol,
-            TREND_TIMEFRAME,
-            CANDLE_LIMIT_5M
-        )
+        return
 
-        if df5 is None or df5.empty:
 
-            print(
-                f"[{symbol}] No 5M data received"
-            )
+# -----------------------------
+# 5M DATA
+# -----------------------------
 
-            return
+print(
+    f"[{symbol}] Getting 5M confirmation data..."
+)
 
-        # =================================================
-        # 1M DATA
-        # =================================================
+df5 = get_market_data(
+    symbol,
+    "5min",
+    CANDLE_LIMIT_5M
+)
 
-        print(
-            f"[{symbol}] Getting "
-            f"{ENTRY_TIMEFRAME} entry data..."
-        )
 
-        df1 = get_market_data(
-            symbol,
-            ENTRY_TIMEFRAME,
-            CANDLE_LIMIT_1M
-        )
+if df5 is None or df5.empty:
 
-        if df1 is None or df1.empty:
+    print(
+        f"[{symbol}] No 5M data received"
+    )
 
-            print(
-                f"[{symbol}] No 1M data received"
-            )
+    return
 
-            return
+
+# -----------------------------
+# 1M DATA
+# -----------------------------
+
+print(
+    f"[{symbol}] Getting 1M entry data..."
+)
+
+df1 = get_market_data(
+    symbol,
+    ENTRY_TIMEFRAME,
+    CANDLE_LIMIT_1M
+)
+
+
+if df1 is None or df1.empty:
+
+    print(
+        f"[{symbol}] No 1M data received"
+    )
+
+    return
 
         # =================================================
         # GOLDPRO+
