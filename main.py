@@ -1,11 +1,12 @@
+import time
+
 from config import (
     MARKETS,
     STRATEGY_MODE,
     ENTRY_TIMEFRAME,
-    TREND_TIMEFRAME,
+    CANDLE_LIMIT_15M,
     CANDLE_LIMIT_5M,
     CANDLE_LIMIT_1M,
-    CANDLE_LIMIT_15M,
     CHECK_DELAY_SECONDS,
 )
 
@@ -26,7 +27,6 @@ if STRATEGY_MODE == "SCALPER":
         "🧠 Strategy Loaded: GoldPro+ Scalper V1"
     )
 
-
 else:
 
     from goldpro_plus_strategy import (
@@ -36,6 +36,7 @@ else:
     print(
         "🧠 Strategy Loaded: GoldPro+ Classic"
     )
+
 
 # =========================================================
 # MARKET CHECK
@@ -48,277 +49,209 @@ def check_market(symbol):
     print(f"========== {symbol} ==========")
     print("=" * 60)
 
+
     try:
 
+        df15 = None
+
+
         # =================================================
-# MARKET DATA
-# =================================================
+        # SCALPER DATA
+        # =================================================
 
-# -----------------------------
-# 15M DATA (Scalper Trend)
-# -----------------------------
+        if STRATEGY_MODE == "SCALPER":
 
-df15 = None
 
-if STRATEGY_MODE == "SCALPER":
+            print(
+                f"[{symbol}] Getting 15M trend data..."
+            )
 
-    print(
-        f"[{symbol}] Getting 15M trend data..."
-    )
 
-    df15 = get_market_data(
-        symbol,
-        "15min",
-        CANDLE_LIMIT_15M
-    )
+            df15 = get_market_data(
+                symbol,
+                "15min",
+                CANDLE_LIMIT_15M
+            )
 
-    if df15 is None or df15.empty:
+
+            if df15 is None or df15.empty:
+
+                print(
+                    f"[{symbol}] No 15M data received"
+                )
+
+                return
+
+
+
+        # =================================================
+        # 5M DATA
+        # =================================================
 
         print(
-            f"[{symbol}] No 15M data received"
+            f"[{symbol}] Getting 5M data..."
         )
 
-        return
+
+        df5 = get_market_data(
+            symbol,
+            "5min",
+            CANDLE_LIMIT_5M
+        )
 
 
-# -----------------------------
-# 5M DATA
-# -----------------------------
+        if df5 is None or df5.empty:
 
-print(
-    f"[{symbol}] Getting 5M confirmation data..."
-)
+            print(
+                f"[{symbol}] No 5M data received"
+            )
 
-df5 = get_market_data(
-    symbol,
-    "5min",
-    CANDLE_LIMIT_5M
-)
+            return
 
 
-if df5 is None or df5.empty:
-
-    print(
-        f"[{symbol}] No 5M data received"
-    )
-
-    return
-
-
-# -----------------------------
-# 1M DATA
-# -----------------------------
-
-print(
-    f"[{symbol}] Getting 1M entry data..."
-)
-
-df1 = get_market_data(
-    symbol,
-    ENTRY_TIMEFRAME,
-    CANDLE_LIMIT_1M
-)
-
-
-if df1 is None or df1.empty:
-
-    print(
-        f"[{symbol}] No 1M data received"
-    )
-
-    return
 
         # =================================================
-        # GOLDPRO+
-        #
-        # 5M = TREND
-        # 1M = ENTRY
+        # 1M DATA
         # =================================================
-# =================================================
-# STRATEGY EXECUTION
-# =================================================
 
-if STRATEGY_MODE == "SCALPER":
+        print(
+            f"[{symbol}] Getting 1M data..."
+        )
 
-    result = generate_scalper_signal(
-        df15,
-        df5,
-        df1
-    )
 
-else:
+        df1 = get_market_data(
+            symbol,
+            ENTRY_TIMEFRAME,
+            CANDLE_LIMIT_1M
+        )
 
-    result = generate_goldpro_plus_signal(
-        df5,
-        df1
-    ) =================================================
+
+        if df1 is None or df1.empty:
+
+            print(
+                f"[{symbol}] No 1M data received"
+            )
+
+            return
+
+
+
+        # =================================================
+        # STRATEGY
+        # =================================================
+
+
+        if STRATEGY_MODE == "SCALPER":
+
+
+            result = generate_scalper_signal(
+                df15,
+                df5,
+                df1
+            )
+
+
+        else:
+
+
+            result = generate_goldpro_plus_signal(
+                df5,
+                df1
+            )
+
+
+
+        # =================================================
         # RESULT
         # =================================================
 
+
         print()
+
         print(
             f"[{symbol}] GoldPro+ Signal:"
         )
+
 
         print(
             result
         )
 
-        # =================================================
-        # BASIC INFORMATION
-        # =================================================
 
         signal = result.get(
             "signal",
             "NO SIGNAL"
         )
 
+
         score = result.get(
             "score",
             0
         )
+
+
+        price = result.get(
+            "price"
+        )
+
 
         trend = result.get(
             "trend",
             "NONE"
         )
 
-        price = result.get(
-            "price"
-        )
-
-        rsi = result.get(
-            "rsi"
-        )
-
-        atr = result.get(
-            "atr"
-        )
 
         print()
-        print(
-            f"📈 5M Trend: {trend}"
-        )
 
         print(
-            f"🎯 1M Signal: {signal}"
+            f"📈 Trend: {trend}"
         )
+
+
+        print(
+            f"🎯 Signal: {signal}"
+        )
+
 
         print(
             f"⭐ Score: {score}/100"
         )
 
+
         print(
             f"💰 Price: {price}"
         )
 
-        print(
-            f"RSI: {rsi}"
-        )
 
-        print(
-            f"ATR: {atr}"
-        )
+        print()
 
-        # =================================================
-        # BUY
-        # =================================================
 
-        if signal == "BUY":
-
-            print()
-            print(
-                "🟢 =============================="
-            )
+        for reason in result.get(
+            "reasons",
+            []
+        ):
 
             print(
-                "🟢 GOLDPRO+ BUY SIGNAL"
+                " •",
+                reason
             )
 
-            print(
-                "🟢 =============================="
-            )
 
-            print(
-                f"Entry: {price}"
-            )
-
-            print(
-                f"Score: {score}/100"
-            )
-
-            print(
-                "Note: TP/SL will be added "
-                "in the next strategy version."
-            )
-
-        # =================================================
-        # SELL
-        # =================================================
-
-        elif signal == "SELL":
-
-            print()
-            print(
-                "🔴 =============================="
-            )
-
-            print(
-                "🔴 GOLDPRO+ SELL SIGNAL"
-            )
-
-            print(
-                "🔴 =============================="
-            )
-
-            print(
-                f"Entry: {price}"
-            )
-
-            print(
-                f"Score: {score}/100"
-            )
-
-            print(
-                "Note: TP/SL will be added "
-                "in the next strategy version."
-            )
-
-        # =================================================
-        # NO SIGNAL
-        # =================================================
-
-        else:
-
-            print()
-            print(
-                "⚪ GOLDPRO+ WAITING / NO SIGNAL"
-            )
-
-            print(
-                f"Reason:"
-            )
-
-            for reason in result.get(
-                "reasons",
-                []
-            ):
-
-                print(
-                    f"  • {reason}"
-                )
 
     except Exception as exc:
 
+
         print()
+
         print(
-            f"❌ [{symbol}] "
-            f"Market check error:"
+            f"❌ [{symbol}] Market check error:"
         )
+
 
         print(
             repr(exc)
         )
+
 
 
 # =========================================================
@@ -327,73 +260,95 @@ else:
 
 def main():
 
-    print()
-    print(
-        "🟡 GoldPro+ 1M Signal Bot Started"
-    )
-
-    print(
-        "📊 Markets: XAU/USD"
-    )
-
-    print(
-        "📈 Trend timeframe: 5M"
-    )
-
-    print(
-        "🎯 Entry timeframe: 1M"
-    )
-
-    print(
-        "🧠 Strategy: 5M Trend → 1M Entry"
-    )
 
     print()
+
+    print(
+        "🟡 GoldPro+ Signal Bot Started"
+    )
+
+
+    print(
+        f"📊 Markets: {MARKETS}"
+    )
+
+
+    print(
+        f"⚙️ Mode: {STRATEGY_MODE}"
+    )
+
+
+    if STRATEGY_MODE == "SCALPER":
+
+        print(
+            "📈 Strategy: 15M Trend → 5M Confirmation → 1M Entry"
+        )
+
+    else:
+
+        print(
+            "📈 Strategy: 5M Trend → 1M Entry"
+        )
+
+
+    print()
+
     print(
         "⏳ Waiting for market data..."
     )
 
+
     while True:
+
 
         try:
 
+
             for symbol in MARKETS:
+
 
                 check_market(
                     symbol
                 )
 
+
+
             print()
+
             print(
                 f"⏳ Next check in "
                 f"{CHECK_DELAY_SECONDS} seconds..."
             )
 
+
             time.sleep(
                 CHECK_DELAY_SECONDS
             )
 
+
+
         except KeyboardInterrupt:
 
-            print()
+
             print(
-                "🛑 GoldPro+ stopped"
+                "🛑 Bot stopped"
             )
 
             break
 
+
+
         except Exception as exc:
 
-            print()
-            print(
-                "❌ Main loop error:"
-            )
 
             print(
+                "❌ Main loop error:",
                 repr(exc)
             )
 
+
             time.sleep(5)
+
 
 
 # =========================================================
