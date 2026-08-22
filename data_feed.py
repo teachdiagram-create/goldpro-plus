@@ -1,21 +1,24 @@
 # =========================================================
-# GoldPro+ Data Feed V2
+# GoldPro+ Data Feed V3
 #
 # Twelve Data
 #
-# 30M Trend  <- built from 15M
-# 15M        <- confirmation
-# 5M         <- entry
+# 15M -> Trend
+# 5M  -> Confirmation
+# 1M  -> Entry
 #
-# فقط CLOSED candles
-# دارای CACHE برای کاهش مصرف API
+# Features:
+# - CLOSED candles only
+# - Cache
+# - 429 detection
+# - Full API error response
+# - Automatic cooldown after 429
 # =========================================================
 
 import requests
 import pandas as pd
 
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
 
 from config import TWELVE_DATA_API_KEY
 
@@ -31,19 +34,6 @@ URL = "https://api.twelvedata.com/time_series"
 # CACHE
 # =========================================================
 
-# ساختار:
-#
-# {
-#     ("XAU/USD", "5min"): {
-#         "data": dataframe,
-#         "time": timestamp
-#     }
-# }
-#
-# هدف:
-# جلوگیری از درخواست‌های تکراری Twelve Data
-# =========================================================
-
 _DATA_CACHE = {}
 
 
@@ -57,6 +47,20 @@ CACHE_TTL = {
     "15min": 840,
     "30min": 1680,
 }
+
+
+# =========================================================
+# 429 COOLDOWN
+# =========================================================
+#
+# اگر Twelve Data خطای 429 بدهد،
+# تا پایان این مدت درخواست جدید نمی‌فرستیم.
+#
+# =========================================================
+
+RATE_LIMIT_COOLDOWN_SECONDS = 120
+
+_RATE_LIMIT_UNTIL = None
 
 
 # =========================================================
@@ -98,6 +102,66 @@ def _interval_to_minutes(interval):
 
 
 # =========================================================
+# RATE LIMIT CHECK
+# =========================================================
+
+def _rate_limit_active():
+
+    global _RATE_LIMIT_UNTIL
+
+    if _RATE_LIMIT_UNTIL is None:
+        return False
+
+    now = datetime.now(
+        timezone.utc
+    )
+
+    if now >= _RATE_LIMIT_UNTIL:
+
+        _RATE_LIMIT_UNTIL = None
+
+        return False
+
+    remaining = (
+        _RATE_LIMIT_UNTIL - now
+    ).total_seconds()
+
+    print(
+        "⏳ Twelve Data cooldown active: "
+        f"{remaining:.0f}s remaining"
+    )
+
+    return True
+
+
+# =========================================================
+# START RATE LIMIT COOLDOWN
+# =========================================================
+
+def _start_rate_limit_cooldown():
+
+    global _RATE_LIMIT_UNTIL
+
+    _RATE_LIMIT_UNTIL = (
+        datetime.now(
+            timezone.utc
+        )
+        + timedelta(
+            seconds=RATE_LIMIT_COOLDOWN_SECONDS
+        )
+    )
+
+    print(
+        "🚫 Twelve Data 429 detected."
+    )
+
+    print(
+        "⏳ New API requests paused for "
+        f"{RATE_LIMIT_COOLDOWN_SECONDS} seconds."
+    )
+
+
+# =========================================================
 # CACHE CHECK
 # =========================================================
 
@@ -130,6 +194,7 @@ def _get_cached_data(
         saved_at is None
         or dataframe is None
     ):
+
         return None
 
     ttl = CACHE_TTL.get(
@@ -196,17 +261,6 @@ def get_market_data(
     interval,
     outputsize=200
 ):
-    """
-    دریافت داده بازار از Twelve Data.
-
-    ویژگی‌ها:
-
-    - فقط CLOSED candles
-    - Cache
-    - تبدیل OHLC به عدد
-    - مرتب‌سازی زمانی
-    - مدیریت خطای API
-    """
 
     # -----------------------------------------------------
     # API KEY
@@ -236,12 +290,26 @@ def get_market_data(
 
 
     # -----------------------------------------------------
+    # RATE LIMIT
+    # -----------------------------------------------------
+
+    if _rate_limit_active():
+
+        print(
+            f"[{symbol} {interval}] "
+            "Skipping Twelve Data request."
+        )
+
+        return None
+
+
+    # -----------------------------------------------------
     # REQUEST
     # -----------------------------------------------------
 
     print(
         f"[{symbol} {interval}] "
-        f"Requesting Twelve Data..."
+        "Requesting Twelve Data..."
     )
 
 
@@ -273,9 +341,45 @@ def get_market_data(
         )
 
 
-        # -------------------------------------------------
-        # HTTP CHECK
-        # -------------------------------------------------
+        # =================================================
+        # HTTP STATUS
+        # =================================================
+
+        print(
+            f"[{symbol} {interval}] "
+            f"HTTP status: "
+            f"{response.status_code}"
+        )
+
+
+        # =================================================
+        # HTTP 429
+        # =================================================
+
+        if response.status_code == 429:
+
+            print(
+                f"[{symbol} {interval}] "
+                "HTTP error: 429"
+            )
+
+            print(
+                f"[{symbol} {interval}] "
+                "Twelve Data full response:"
+            )
+
+            print(
+                response.text
+            )
+
+            _start_rate_limit_cooldown()
+
+            return None
+
+
+        # =================================================
+        # OTHER HTTP ERRORS
+        # =================================================
 
         if response.status_code != 200:
 
@@ -285,15 +389,43 @@ def get_market_data(
                 f"{response.status_code}"
             )
 
+            print(
+                f"[{symbol} {interval}] "
+                "Twelve Data response:"
+            )
+
+            print(
+                response.text
+            )
+
             return None
 
 
-        data = response.json()
+        # =================================================
+        # JSON
+        # =================================================
+
+        try:
+
+            data = response.json()
+
+        except ValueError:
+
+            print(
+                f"[{symbol} {interval}] "
+                "Invalid JSON response:"
+            )
+
+            print(
+                response.text
+            )
+
+            return None
 
 
-        # -------------------------------------------------
+        # =================================================
         # TWELVE DATA ERROR
-        # -------------------------------------------------
+        # =================================================
 
         if data.get(
             "status"
@@ -301,31 +433,37 @@ def get_market_data(
 
             print(
                 f"[{symbol} {interval}] "
-                f"Twelve Data error: "
-                f"{data}"
+                "Twelve Data error:"
+            )
+
+            print(
+                data
             )
 
             return None
 
 
-        # -------------------------------------------------
+        # =================================================
         # VALUES CHECK
-        # -------------------------------------------------
+        # =================================================
 
         if "values" not in data:
 
             print(
                 f"[{symbol} {interval}] "
-                f"No values returned: "
-                f"{data}"
+                "No values returned:"
+            )
+
+            print(
+                data
             )
 
             return None
 
 
-        # -------------------------------------------------
+        # =================================================
         # DATAFRAME
-        # -------------------------------------------------
+        # =================================================
 
         df = pd.DataFrame(
             data["values"]
@@ -336,15 +474,15 @@ def get_market_data(
 
             print(
                 f"[{symbol} {interval}] "
-                f"Empty dataframe"
+                "Empty dataframe"
             )
 
             return None
 
 
-        # -------------------------------------------------
+        # =================================================
         # DATETIME
-        # -------------------------------------------------
+        # =================================================
 
         df["datetime"] = pd.to_datetime(
             df["datetime"],
@@ -353,9 +491,9 @@ def get_market_data(
         )
 
 
-        # -------------------------------------------------
+        # =================================================
         # OHLC
-        # -------------------------------------------------
+        # =================================================
 
         for column in [
             "open",
@@ -381,9 +519,9 @@ def get_market_data(
             )
 
 
-        # -------------------------------------------------
+        # =================================================
         # VOLUME
-        # -------------------------------------------------
+        # =================================================
 
         if "volume" in df.columns:
 
@@ -393,9 +531,9 @@ def get_market_data(
             )
 
 
-        # -------------------------------------------------
+        # =================================================
         # CLEAN
-        # -------------------------------------------------
+        # =================================================
 
         df = df.dropna(
             subset=[
@@ -423,9 +561,9 @@ def get_market_data(
         )
 
 
-        # -------------------------------------------------
+        # =================================================
         # REMOVE FORMING CANDLE
-        # -------------------------------------------------
+        # =================================================
 
         minutes = _interval_to_minutes(
             interval
@@ -456,44 +594,44 @@ def get_market_data(
             )
 
 
-        # -------------------------------------------------
+        # =================================================
         # EMPTY CHECK
-        # -------------------------------------------------
+        # =================================================
 
         if df.empty:
 
             print(
                 f"[{symbol} {interval}] "
-                f"No CLOSED candles available"
+                "No CLOSED candles available"
             )
 
             return None
 
 
-        # -------------------------------------------------
+        # =================================================
         # LATEST CANDLE
-        # -------------------------------------------------
+        # =================================================
 
         latest = df.iloc[-1]
 
 
         print(
             f"[{symbol} {interval}] "
-            f"Latest CLOSED candle: "
+            "Latest CLOSED candle: "
             f"{latest['time']}"
         )
 
 
         print(
             f"[{symbol} {interval}] "
-            f"Latest CLOSED close: "
+            "Latest CLOSED close: "
             f"{latest['close']}"
         )
 
 
-        # -------------------------------------------------
+        # =================================================
         # SAVE CACHE
-        # -------------------------------------------------
+        # =================================================
 
         _save_cached_data(
             symbol,
@@ -513,8 +651,11 @@ def get_market_data(
 
         print(
             f"[{symbol} {interval}] "
-            f"Connection error: "
-            f"{exc}"
+            "Connection error:"
+        )
+
+        print(
+            repr(exc)
         )
 
         return None
@@ -528,11 +669,29 @@ def get_market_data(
 
         print(
             f"[{symbol} {interval}] "
-            f"Data processing error: "
-            f"{exc}"
+            "Data processing error:"
+        )
+
+        print(
+            repr(exc)
         )
 
         return None
+
+
+# =========================================================
+# GOLD 1M
+# =========================================================
+
+def get_gold_1m(
+    outputsize=200
+):
+
+    return get_market_data(
+        "XAU/USD",
+        "1min",
+        outputsize
+    )
 
 
 # =========================================================
@@ -561,6 +720,21 @@ def get_gold_15m(
     return get_market_data(
         "XAU/USD",
         "15min",
+        outputsize
+    )
+
+
+# =========================================================
+# GOLD 30M
+# =========================================================
+
+def get_gold_30m(
+    outputsize=200
+):
+
+    return get_market_data(
+        "XAU/USD",
+        "30min",
         outputsize
     )
 
@@ -636,12 +810,4 @@ def print_cache_status():
 
 
         print(
-            f"{symbol} {interval} | "
-            f"Age: {age:.0f}s | "
-            f"Rows: {rows}"
-        )
-
-
-    print(
-        "================================"
-    )
+            f"{symbol} {interval
