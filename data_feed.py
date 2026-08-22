@@ -810,4 +810,12 @@ def print_cache_status():
 
 
         print(
-            f"{symbol} {interval
+            f"{symbol} {interval} | "
+            f"Age: {age:.0f}s | "
+            f"Rows: {rows}"
+        )
+
+
+    print(
+        "================================"
+    )
