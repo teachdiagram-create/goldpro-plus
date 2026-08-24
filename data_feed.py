@@ -7,14 +7,14 @@
 # 5M  -> Confirmation
 # 1M  -> Entry
 #
-# Features:
-# - CLOSED candles only
-# - Cache
-# - 429 detection
-# - Full API error response
-# - Automatic cooldown after 429
+# هدف:
+# کاهش شدید مصرف API
+# جلوگیری از 429
+# استفاده از آخرین دیتای موفق
+# فقط CLOSED candles
 # =========================================================
 
+import time
 import requests
 import pandas as pd
 
@@ -31,43 +31,66 @@ URL = "https://api.twelvedata.com/time_series"
 
 
 # =========================================================
+# DEBUG
+# =========================================================
+
+DEBUG = True
+
+
+# =========================================================
+# FETCH INTERVAL
+#
+# حداقل فاصله بین درخواست‌های واقعی API
+#
+# 15M -> هر 30 دقیقه
+# 5M  -> هر 15 دقیقه
+# 1M  -> هر 3 دقیقه
+# =========================================================
+
+FETCH_INTERVAL = {
+
+    "15min": 1800,
+
+    "5min": 900,
+
+    "1min": 180,
+}
+
+
+# =========================================================
 # CACHE
+#
+# داده موفق آخر را نگه می‌داریم.
+#
 # =========================================================
 
 _DATA_CACHE = {}
 
 
 # =========================================================
-# CACHE TTL
-# =========================================================
-
-CACHE_TTL = {
-    "1min": 50,
-    "5min": 240,
-    "15min": 840,
-    "30min": 1680,
-}
-
-
-# =========================================================
-# 429 COOLDOWN
-# =========================================================
+# LAST REQUEST
 #
-# اگر Twelve Data خطای 429 بدهد،
-# تا پایان این مدت درخواست جدید نمی‌فرستیم.
+# زمان آخرین درخواست واقعی
+# =========================================================
+
+_LAST_REQUEST = {}
+
+
+# =========================================================
+# API COOLDOWN
 #
+# اگر 429 دریافت شود،
+# درخواست جدید تا زمان مناسب متوقف می‌شود.
 # =========================================================
 
-RATE_LIMIT_COOLDOWN_SECONDS = 120
-
-_RATE_LIMIT_UNTIL = None
+_API_COOLDOWN_UNTIL = None
 
 
 # =========================================================
-# DEBUG
+# API STATUS
 # =========================================================
 
-DEBUG = True
+_API_BLOCKED = False
 
 
 # =========================================================
@@ -102,70 +125,140 @@ def _interval_to_minutes(interval):
 
 
 # =========================================================
-# RATE LIMIT CHECK
+# UTC NOW
 # =========================================================
 
-def _rate_limit_active():
+def _utc_now():
 
-    global _RATE_LIMIT_UNTIL
-
-    if _RATE_LIMIT_UNTIL is None:
-        return False
-
-    now = datetime.now(
+    return datetime.now(
         timezone.utc
     )
 
-    if now >= _RATE_LIMIT_UNTIL:
 
-        _RATE_LIMIT_UNTIL = None
+# =========================================================
+# NEXT UTC RESET
+#
+# Twelve Data روزانه در UTC ریست می‌شود.
+# =========================================================
+
+def _next_utc_reset():
+
+    now = _utc_now()
+
+    tomorrow = (
+        now.date()
+        + timedelta(days=1)
+    )
+
+    return datetime.combine(
+        tomorrow,
+        datetime.min.time(),
+        tzinfo=timezone.utc
+    )
+
+
+# =========================================================
+# BLOCK API UNTIL RESET
+# =========================================================
+
+def _block_api_until_reset():
+
+    global _API_COOLDOWN_UNTIL
+    global _API_BLOCKED
+
+    _API_BLOCKED = True
+
+    _API_COOLDOWN_UNTIL = (
+        _next_utc_reset()
+    )
+
+    if DEBUG:
+
+        remaining = (
+            _API_COOLDOWN_UNTIL
+            - _utc_now()
+        ).total_seconds()
+
+        minutes = int(
+            max(
+                remaining,
+                0
+            ) / 60
+        )
+
+        print(
+            "🚫 Twelve Data daily limit reached."
+        )
+
+        print(
+            f"⏳ API requests blocked "
+            f"until next UTC reset "
+            f"(~{minutes} minutes)"
+        )
+
+
+# =========================================================
+# CHECK API BLOCK
+# =========================================================
+
+def _is_api_blocked():
+
+    global _API_BLOCKED
+    global _API_COOLDOWN_UNTIL
+
+    if not _API_BLOCKED:
+
+        return False
+
+    if (
+        _API_COOLDOWN_UNTIL is None
+    ):
+
+        return False
+
+    now = _utc_now()
+
+    if now >= _API_COOLDOWN_UNTIL:
+
+        _API_BLOCKED = False
+
+        _API_COOLDOWN_UNTIL = None
+
+        print(
+            "🟢 Twelve Data daily limit "
+            "window reset."
+        )
 
         return False
 
     remaining = (
-        _RATE_LIMIT_UNTIL - now
+        _API_COOLDOWN_UNTIL
+        - now
     ).total_seconds()
 
-    print(
-        "⏳ Twelve Data cooldown active: "
-        f"{remaining:.0f}s remaining"
+    minutes = int(
+        max(
+            remaining,
+            0
+        ) / 60
     )
+
+    if DEBUG:
+
+        print(
+            f"⏳ Twelve Data blocked "
+            f"until UTC reset "
+            f"(~{minutes} min remaining)"
+        )
 
     return True
 
 
 # =========================================================
-# START RATE LIMIT COOLDOWN
+# GET CACHE
 # =========================================================
 
-def _start_rate_limit_cooldown():
-
-    global _RATE_LIMIT_UNTIL
-
-    _RATE_LIMIT_UNTIL = (
-        datetime.now(
-            timezone.utc
-        )
-        + timedelta(
-            seconds=RATE_LIMIT_COOLDOWN_SECONDS
-        )
-    )
-
-    print(
-        "🚫 Twelve Data 429 detected."
-    )
-
-    print(
-        "⏳ New API requests paused for "
-        f"{RATE_LIMIT_COOLDOWN_SECONDS} seconds."
-    )
-
-
-# =========================================================
-# CACHE CHECK
-# =========================================================
-
-def _get_cached_data(
+def _get_cache(
     symbol,
     interval
 ):
@@ -175,61 +268,73 @@ def _get_cached_data(
         interval
     )
 
-    cached = _DATA_CACHE.get(
+    item = _DATA_CACHE.get(
         key
     )
 
-    if cached is None:
+    if item is None:
+
         return None
 
-    saved_at = cached.get(
-        "saved_at"
-    )
-
-    dataframe = cached.get(
+    dataframe = item.get(
         "data"
     )
 
+    saved_at = item.get(
+        "saved_at"
+    )
+
     if (
-        saved_at is None
-        or dataframe is None
+        dataframe is None
+        or saved_at is None
     ):
 
         return None
 
-    ttl = CACHE_TTL.get(
-        interval,
-        60
+    return dataframe.copy()
+
+
+# =========================================================
+# CACHE AGE
+# =========================================================
+
+def _cache_age(
+    symbol,
+    interval
+):
+
+    key = (
+        symbol,
+        interval
     )
 
-    now = datetime.now(
-        timezone.utc
+    item = _DATA_CACHE.get(
+        key
     )
 
-    age = (
-        now - saved_at
+    if item is None:
+
+        return None
+
+    saved_at = item.get(
+        "saved_at"
+    )
+
+    if saved_at is None:
+
+        return None
+
+    return (
+        _utc_now()
+        - saved_at
     ).total_seconds()
 
-    if age < ttl:
-
-        if DEBUG:
-
-            print(
-                f"[{symbol} {interval}] "
-                f"Using cached data "
-                f"({age:.0f}s old)"
-            )
-
-        return dataframe.copy()
-
-    return None
-
 
 # =========================================================
-# CACHE SAVE
+# SAVE CACHE
 # =========================================================
 
-def _save_cached_data(
+def _save_cache(
     symbol,
     interval,
     df
@@ -243,9 +348,7 @@ def _save_cached_data(
     _DATA_CACHE[key] = {
 
         "saved_at":
-            datetime.now(
-                timezone.utc
-            ),
+            _utc_now(),
 
         "data":
             df.copy()
@@ -253,7 +356,251 @@ def _save_cached_data(
 
 
 # =========================================================
-# FETCH MARKET DATA
+# SHOULD REQUEST
+# =========================================================
+
+def _should_request(
+    symbol,
+    interval
+):
+
+    key = (
+        symbol,
+        interval
+    )
+
+    now = _utc_now()
+
+    last_request = (
+        _LAST_REQUEST.get(
+            key
+        )
+    )
+
+    if last_request is None:
+
+        return True
+
+    elapsed = (
+        now - last_request
+    ).total_seconds()
+
+    required = FETCH_INTERVAL.get(
+        interval,
+        300
+    )
+
+    if elapsed >= required:
+
+        return True
+
+    remaining = (
+        required - elapsed
+    )
+
+    if DEBUG:
+
+        print(
+            f"[{symbol} {interval}] "
+            f"API request skipped. "
+            f"Next request in "
+            f"{int(remaining)}s"
+        )
+
+    return False
+
+
+# =========================================================
+# MARK REQUEST
+# =========================================================
+
+def _mark_request(
+    symbol,
+    interval
+):
+
+    key = (
+        symbol,
+        interval
+    )
+
+    _LAST_REQUEST[key] = (
+        _utc_now()
+    )
+
+
+# =========================================================
+# PREPARE DATAFRAME
+# =========================================================
+
+def _prepare_dataframe(
+    symbol,
+    interval,
+    data
+):
+
+    if not data:
+
+        print(
+            f"[{symbol} {interval}] "
+            "Empty API response"
+        )
+
+        return None
+
+    if "values" not in data:
+
+        print(
+            f"[{symbol} {interval}] "
+            "No values returned."
+        )
+
+        return None
+
+    df = pd.DataFrame(
+        data["values"]
+    )
+
+    if df.empty:
+
+        print(
+            f"[{symbol} {interval}] "
+            "Empty dataframe"
+        )
+
+        return None
+
+    # -----------------------------------------------------
+    # DATETIME
+    # -----------------------------------------------------
+
+    if "datetime" not in df.columns:
+
+        print(
+            f"[{symbol} {interval}] "
+            "Missing datetime column"
+        )
+
+        return None
+
+    df["datetime"] = pd.to_datetime(
+        df["datetime"],
+        errors="coerce",
+        utc=True
+    )
+
+    # -----------------------------------------------------
+    # OHLC
+    # -----------------------------------------------------
+
+    for column in [
+        "open",
+        "high",
+        "low",
+        "close"
+    ]:
+
+        if column not in df.columns:
+
+            print(
+                f"[{symbol} {interval}] "
+                f"Missing column: {column}"
+            )
+
+            return None
+
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce"
+        )
+
+    # -----------------------------------------------------
+    # VOLUME
+    # -----------------------------------------------------
+
+    if "volume" in df.columns:
+
+        df["volume"] = pd.to_numeric(
+            df["volume"],
+            errors="coerce"
+        )
+
+    # -----------------------------------------------------
+    # CLEAN
+    # -----------------------------------------------------
+
+    df = df.dropna(
+        subset=[
+            "datetime",
+            "open",
+            "high",
+            "low",
+            "close"
+        ]
+    )
+
+    df = df.sort_values(
+        "datetime"
+    ).reset_index(
+        drop=True
+    )
+
+    # -----------------------------------------------------
+    # RENAME
+    # -----------------------------------------------------
+
+    df.rename(
+        columns={
+            "datetime": "time"
+        },
+        inplace=True
+    )
+
+    # -----------------------------------------------------
+    # REMOVE FORMING CANDLE
+    # -----------------------------------------------------
+
+    minutes = _interval_to_minutes(
+        interval
+    )
+
+    if minutes is not None:
+
+        now = pd.Timestamp(
+            _utc_now()
+        )
+
+        cutoff = (
+            now
+            - pd.Timedelta(
+                minutes=minutes
+            )
+        )
+
+        df = df[
+            df["time"] <= cutoff
+        ].reset_index(
+            drop=True
+        )
+
+    # -----------------------------------------------------
+    # EMPTY AFTER CLEAN
+    # -----------------------------------------------------
+
+    if df.empty:
+
+        print(
+            f"[{symbol} {interval}] "
+            "No CLOSED candles available"
+        )
+
+        return None
+
+    return df
+
+
+# =========================================================
+# MARKET DATA
 # =========================================================
 
 def get_market_data(
@@ -262,9 +609,11 @@ def get_market_data(
     outputsize=200
 ):
 
-    # -----------------------------------------------------
+    global _API_BLOCKED
+
+    # =====================================================
     # API KEY
-    # -----------------------------------------------------
+    # =====================================================
 
     if not TWELVE_DATA_API_KEY:
 
@@ -274,44 +623,82 @@ def get_market_data(
 
         return None
 
+    # =====================================================
+    # DAILY API BLOCK
+    # =====================================================
 
-    # -----------------------------------------------------
-    # CACHE
-    # -----------------------------------------------------
+    if _is_api_blocked():
 
-    cached = _get_cached_data(
-        symbol,
-        interval
-    )
+        cached = _get_cache(
+            symbol,
+            interval
+        )
 
-    if cached is not None:
+        if cached is not None:
 
-        return cached
+            age = _cache_age(
+                symbol,
+                interval
+            )
 
+            print(
+                f"[{symbol} {interval}] "
+                f"Using last successful cache "
+                f"({age:.0f}s old)"
+            )
 
-    # -----------------------------------------------------
-    # RATE LIMIT
-    # -----------------------------------------------------
-
-    if _rate_limit_active():
+            return cached
 
         print(
             f"[{symbol} {interval}] "
-            "Skipping Twelve Data request."
+            "No cache available."
         )
 
         return None
 
+    # =====================================================
+    # CACHE
+    #
+    # اگر هنوز زمان درخواست نرسیده،
+    # از آخرین داده موفق استفاده کن.
+    # =====================================================
 
-    # -----------------------------------------------------
+    if not _should_request(
+        symbol,
+        interval
+    ):
+
+        cached = _get_cache(
+            symbol,
+            interval
+        )
+
+        if cached is not None:
+
+            age = _cache_age(
+                symbol,
+                interval
+            )
+
+            print(
+                f"[{symbol} {interval}] "
+                f"Using cached data "
+                f"({age:.0f}s old)"
+            )
+
+            return cached
+
+        # اگر cache نداریم،
+        # اجازه می‌دهیم درخواست انجام شود.
+
+    # =====================================================
     # REQUEST
-    # -----------------------------------------------------
+    # =====================================================
 
     print(
         f"[{symbol} {interval}] "
         "Requesting Twelve Data..."
     )
-
 
     params = {
 
@@ -331,6 +718,14 @@ def get_market_data(
             TWELVE_DATA_API_KEY,
     }
 
+    # -----------------------------------------------------
+    # ثبت زمان درخواست
+    # -----------------------------------------------------
+
+    _mark_request(
+        symbol,
+        interval
+    )
 
     try:
 
@@ -339,7 +734,6 @@ def get_market_data(
             params=params,
             timeout=30
         )
-
 
         # =================================================
         # HTTP STATUS
@@ -351,9 +745,8 @@ def get_market_data(
             f"{response.status_code}"
         )
 
-
         # =================================================
-        # HTTP 429
+        # 429
         # =================================================
 
         if response.status_code == 429:
@@ -363,22 +756,93 @@ def get_market_data(
                 "HTTP error: 429"
             )
 
+            try:
+
+                data = response.json()
+
+            except Exception:
+
+                data = {
+                    "message":
+                    response.text
+                }
+
             print(
                 f"[{symbol} {interval}] "
-                "Twelve Data full response:"
+                "Twelve Data response:"
             )
 
             print(
-                response.text
+                data
             )
 
-            _start_rate_limit_cooldown()
+            message = str(
+                data.get(
+                    "message",
+                    ""
+                )
+            ).lower()
+
+            # -------------------------------------------------
+            # DAILY LIMIT
+            # -------------------------------------------------
+
+            daily_limit = (
+                "credits for the day"
+                in message
+                or
+                "daily limit"
+                in message
+                or
+                "current limit"
+                in message
+            )
+
+            if daily_limit:
+
+                print(
+                    "🚫 Twelve Data "
+                    "daily limit detected."
+                )
+
+                _block_api_until_reset()
+
+            else:
+
+                print(
+                    "🚫 Twelve Data "
+                    "429 detected."
+                )
+
+            # -------------------------------------------------
+            # USE CACHE
+            # -------------------------------------------------
+
+            cached = _get_cache(
+                symbol,
+                interval
+            )
+
+            if cached is not None:
+
+                age = _cache_age(
+                    symbol,
+                    interval
+                )
+
+                print(
+                    f"[{symbol} {interval}] "
+                    f"Using last successful "
+                    f"cache after 429 "
+                    f"({age:.0f}s old)"
+                )
+
+                return cached
 
             return None
 
-
         # =================================================
-        # OTHER HTTP ERRORS
+        # OTHER HTTP ERROR
         # =================================================
 
         if response.status_code != 200:
@@ -389,17 +853,16 @@ def get_market_data(
                 f"{response.status_code}"
             )
 
-            print(
-                f"[{symbol} {interval}] "
-                "Twelve Data response:"
+            cached = _get_cache(
+                symbol,
+                interval
             )
 
-            print(
-                response.text
-            )
+            if cached is not None:
+
+                return cached
 
             return None
-
 
         # =================================================
         # JSON
@@ -409,19 +872,23 @@ def get_market_data(
 
             data = response.json()
 
-        except ValueError:
+        except Exception as exc:
 
             print(
                 f"[{symbol} {interval}] "
-                "Invalid JSON response:"
+                f"JSON error: {exc}"
             )
 
-            print(
-                response.text
+            cached = _get_cache(
+                symbol,
+                interval
             )
+
+            if cached is not None:
+
+                return cached
 
             return None
-
 
         # =================================================
         # TWELVE DATA ERROR
@@ -431,217 +898,103 @@ def get_market_data(
             "status"
         ) == "error":
 
-            print(
-                f"[{symbol} {interval}] "
-                "Twelve Data error:"
-            )
-
-            print(
-                data
-            )
-
-            return None
-
-
-        # =================================================
-        # VALUES CHECK
-        # =================================================
-
-        if "values" not in data:
-
-            print(
-                f"[{symbol} {interval}] "
-                "No values returned:"
-            )
-
-            print(
-                data
-            )
-
-            return None
-
-
-        # =================================================
-        # DATAFRAME
-        # =================================================
-
-        df = pd.DataFrame(
-            data["values"]
-        )
-
-
-        if df.empty:
-
-            print(
-                f"[{symbol} {interval}] "
-                "Empty dataframe"
-            )
-
-            return None
-
-
-        # =================================================
-        # DATETIME
-        # =================================================
-
-        df["datetime"] = pd.to_datetime(
-            df["datetime"],
-            errors="coerce",
-            utc=True
-        )
-
-
-        # =================================================
-        # OHLC
-        # =================================================
-
-        for column in [
-            "open",
-            "high",
-            "low",
-            "close"
-        ]:
-
-            if column not in df.columns:
-
-                print(
-                    f"[{symbol} {interval}] "
-                    f"Missing column: "
-                    f"{column}"
-                )
-
-                return None
-
-
-            df[column] = pd.to_numeric(
-                df[column],
-                errors="coerce"
-            )
-
-
-        # =================================================
-        # VOLUME
-        # =================================================
-
-        if "volume" in df.columns:
-
-            df["volume"] = pd.to_numeric(
-                df["volume"],
-                errors="coerce"
-            )
-
-
-        # =================================================
-        # CLEAN
-        # =================================================
-
-        df = df.dropna(
-            subset=[
-                "datetime",
-                "open",
-                "high",
-                "low",
-                "close"
-            ]
-        )
-
-
-        df = df.sort_values(
-            "datetime"
-        ).reset_index(
-            drop=True
-        )
-
-
-        df.rename(
-            columns={
-                "datetime": "time"
-            },
-            inplace=True
-        )
-
-
-        # =================================================
-        # REMOVE FORMING CANDLE
-        # =================================================
-
-        minutes = _interval_to_minutes(
-            interval
-        )
-
-
-        if minutes is not None:
-
-            now = pd.Timestamp(
-                datetime.now(
-                    timezone.utc
+            message = str(
+                data.get(
+                    "message",
+                    ""
                 )
             )
 
-
-            cutoff = (
-                now
-                - pd.Timedelta(
-                    minutes=minutes
-                )
-            )
-
-
-            df = df[
-                df["time"] <= cutoff
-            ].reset_index(
-                drop=True
-            )
-
-
-        # =================================================
-        # EMPTY CHECK
-        # =================================================
-
-        if df.empty:
-
             print(
                 f"[{symbol} {interval}] "
-                "No CLOSED candles available"
+                f"Twelve Data error: "
+                f"{message}"
             )
+
+            # -------------------------------------------------
+            # DAILY LIMIT
+            # -------------------------------------------------
+
+            message_lower = (
+                message.lower()
+            )
+
+            if (
+                "credits for the day"
+                in message_lower
+                or
+                "daily limit"
+                in message_lower
+                or
+                "current limit"
+                in message_lower
+            ):
+
+                _block_api_until_reset()
+
+            cached = _get_cache(
+                symbol,
+                interval
+            )
+
+            if cached is not None:
+
+                return cached
 
             return None
 
+        # =================================================
+        # PREPARE
+        # =================================================
+
+        df = _prepare_dataframe(
+            symbol,
+            interval,
+            data
+        )
+
+        if df is None:
+
+            cached = _get_cache(
+                symbol,
+                interval
+            )
+
+            if cached is not None:
+
+                return cached
+
+            return None
 
         # =================================================
-        # LATEST CANDLE
+        # LATEST CLOSED CANDLE
         # =================================================
 
         latest = df.iloc[-1]
 
-
         print(
             f"[{symbol} {interval}] "
-            "Latest CLOSED candle: "
+            f"Latest CLOSED candle: "
             f"{latest['time']}"
         )
 
-
         print(
             f"[{symbol} {interval}] "
-            "Latest CLOSED close: "
+            f"Latest CLOSED close: "
             f"{latest['close']}"
         )
 
-
         # =================================================
-        # SAVE CACHE
+        # SAVE SUCCESSFUL DATA
         # =================================================
 
-        _save_cached_data(
+        _save_cache(
             symbol,
             interval,
             df
         )
 
-
         return df.copy()
-
 
     # =====================================================
     # REQUEST ERROR
@@ -651,16 +1004,26 @@ def get_market_data(
 
         print(
             f"[{symbol} {interval}] "
-            "Connection error:"
+            f"Connection error: "
+            f"{exc}"
         )
 
-        print(
-            repr(exc)
+        cached = _get_cache(
+            symbol,
+            interval
         )
+
+        if cached is not None:
+
+            print(
+                f"[{symbol} {interval}] "
+                "Using cached data "
+                "after connection error."
+            )
+
+            return cached
 
         return None
-
-
     # =====================================================
     # GENERAL ERROR
     # =====================================================
@@ -669,12 +1032,18 @@ def get_market_data(
 
         print(
             f"[{symbol} {interval}] "
-            "Data processing error:"
+            f"Data processing error: "
+            f"{exc}"
         )
 
-        print(
-            repr(exc)
+        cached = _get_cache(
+            symbol,
+            interval
         )
+
+        if cached is not None:
+
+            return cached
 
         return None
 
@@ -725,26 +1094,11 @@ def get_gold_15m(
 
 
 # =========================================================
-# GOLD 30M
-# =========================================================
-
-def get_gold_30m(
-    outputsize=200
-):
-
-    return get_market_data(
-        "XAU/USD",
-        "30min",
-        outputsize
-    )
-
-
-# =========================================================
 # GOLD GENERIC
 # =========================================================
 
 def get_gold_data(
-    interval="5min",
+    interval="1min",
     outputsize=200
 ):
 
@@ -761,10 +1115,10 @@ def get_gold_data(
 
 def print_cache_status():
 
+    print()
     print(
-        "========== DATA CACHE =========="
+        "========== GOLDPRO+ DATA CACHE =========="
     )
-
 
     if not _DATA_CACHE:
 
@@ -772,13 +1126,13 @@ def print_cache_status():
             "Cache is empty."
         )
 
+        print(
+            "=========================================="
+        )
+
         return
 
-
-    now = datetime.now(
-        timezone.utc
-    )
-
+    now = _utc_now()
 
     for key, value in _DATA_CACHE.items():
 
@@ -788,19 +1142,17 @@ def print_cache_status():
             "saved_at"
         )
 
-        if saved_at is None:
-            continue
-
-
-        age = (
-            now - saved_at
-        ).total_seconds()
-
-
         df = value.get(
             "data"
         )
 
+        if saved_at is None:
+
+            continue
+
+        age = (
+            now - saved_at
+        ).total_seconds()
 
         rows = (
             len(df)
@@ -808,14 +1160,47 @@ def print_cache_status():
             else 0
         )
 
-
         print(
             f"{symbol} {interval} | "
             f"Age: {age:.0f}s | "
             f"Rows: {rows}"
         )
 
+    print(
+        "=========================================="
+    )
+
+
+# =========================================================
+# API STATUS
+# =========================================================
+
+def print_api_status():
+
+    print()
+    print(
+        "========== TWELVE DATA STATUS =========="
+    )
+
+    if _API_BLOCKED:
+
+        print(
+            "🚫 API STATUS: BLOCKED"
+        )
+
+        if _API_COOLDOWN_UNTIL:
+
+            print(
+                "Reset UTC:",
+                _API_COOLDOWN_UNTIL
+            )
+
+    else:
+
+        print(
+            "🟢 API STATUS: AVAILABLE"
+        )
 
     print(
-        "================================"
+        "========================================"
     )
