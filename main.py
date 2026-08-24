@@ -1,5 +1,4 @@
 import time
-from datetime import datetime, timezone
 
 from config import (
     MARKETS,
@@ -9,6 +8,10 @@ from config import (
     CANDLE_LIMIT_5M,
     CANDLE_LIMIT_1M,
     CHECK_DELAY_SECONDS,
+
+    TREND_REFRESH_SECONDS,
+    CONFIRMATION_REFRESH_SECONDS,
+    ENTRY_REFRESH_SECONDS,
 )
 
 from data_feed import get_market_data
@@ -20,9 +23,7 @@ from data_feed import get_market_data
 
 if STRATEGY_MODE == "SCALPER":
 
-    from scalper_strategy import (
-        generate_scalper_signal
-    )
+    from scalper_strategy import generate_scalper_signal
 
     print(
         "🧠 Strategy Loaded: GoldPro+ Scalper V1"
@@ -41,140 +42,121 @@ else:
 
 # =========================================================
 # MEMORY CACHE
-#
-# این Cache برای جلوگیری از درخواست‌های تکراری
-# در main.py است.
-#
-# data_feed.py نیز Cache خودش را دارد.
 # =========================================================
 
 _MARKET_DATA = {}
 
 
 # =========================================================
-# LAST REQUEST TIME
+# LAST SUCCESSFUL REQUEST
 # =========================================================
 
-_LAST_REQUEST = {
-    "15min": {},
-    "5min": {},
-    "1min": {},
+_LAST_REQUEST = {}
+
+
+# =========================================================
+# REFRESH INTERVALS
+# =========================================================
+
+REFRESH_INTERVALS = {
+
+    "15min":
+        TREND_REFRESH_SECONDS,
+
+    "5min":
+        CONFIRMATION_REFRESH_SECONDS,
+
+    "1min":
+        ENTRY_REFRESH_SECONDS,
 }
 
 
 # =========================================================
-# REQUEST INTERVAL
-#
-# 15M -> فقط یک بار در 15 دقیقه
-# 5M  -> فقط یک بار در 5 دقیقه
-# 1M  -> هر 3 دقیقه
+# GET CACHED DATA
 # =========================================================
 
-REQUEST_INTERVAL = {
-    "15min": 900,
-    "5min": 300,
-    "1min": 180,
-}
-
-
-# =========================================================
-# CURRENT UTC
-# =========================================================
-
-def _utc_now():
-
-    return datetime.now(
-        timezone.utc
-    )
-
-
-# =========================================================
-# SHOULD REQUEST?
-# =========================================================
-
-def _should_request(
+def _get_memory_data(
     symbol,
     interval
 ):
 
-    now = time.time()
-
-    last_request = (
-        _LAST_REQUEST
-        .get(interval, {})
-        .get(symbol)
-    )
-
-    if last_request is None:
-
-        return True
-
-    wait_time = REQUEST_INTERVAL.get(
-        interval,
-        180
-    )
-
-    elapsed = (
-        now - last_request
-    )
-
-    if elapsed >= wait_time:
-
-        return True
-
-    return False
-
-
-# =========================================================
-# GET DATA
-#
-# این تابع تصمیم می‌گیرد:
-#
-# آیا باید Twelve Data صدا زده شود؟
-# یا داده قبلی استفاده شود؟
-# =========================================================
-
-def _get_data(
-    symbol,
-    interval,
-    outputsize
-):
-
-    # -----------------------------------------------------
-    # EXISTING DATA
-    # -----------------------------------------------------
-
-    existing = (
+    return (
         _MARKET_DATA
         .get(symbol, {})
         .get(interval)
     )
 
 
+# =========================================================
+# SHOULD REFRESH
+# =========================================================
+
+def _should_refresh(
+    symbol,
+    interval
+):
+
+    now = time.time()
+
+    last = (
+        _LAST_REQUEST
+        .get(symbol, {})
+        .get(interval)
+    )
+
+    # اولین درخواست
+    if last is None:
+        return True
+
+    refresh_time = REFRESH_INTERVALS.get(
+        interval,
+        300
+    )
+
+    return (
+        now - last
+    ) >= refresh_time
+
+
+# =========================================================
+# GET MARKET DATA SMART
+# =========================================================
+
+def _get_smart_market_data(
+    symbol,
+    interval,
+    outputsize
+):
+
+    cached = _get_memory_data(
+        symbol,
+        interval
+    )
+
+
     # -----------------------------------------------------
-    # NO NEED TO REQUEST
+    # USE CACHE
     # -----------------------------------------------------
 
-    if not _should_request(
+    if not _should_refresh(
         symbol,
         interval
     ):
 
-        if existing is not None:
+        if cached is not None:
 
             print(
                 f"[{symbol} {interval}] "
                 "Using main memory cache."
             )
 
-            return existing
+            return cached
 
-        # اگر داده نداریم، اجازه درخواست بده
-        # حتی اگر تایمر قبلی وجود داشته باشد.
-        return get_market_data(
-            symbol,
-            interval,
-            outputsize
+        # اگر cache نداریم،
+        # درخواست اجباری است.
+        print(
+            f"[{symbol} {interval}] "
+            "No memory cache available."
         )
 
 
@@ -188,12 +170,6 @@ def _get_data(
     )
 
 
-    _LAST_REQUEST.setdefault(
-        interval,
-        {}
-    )[symbol] = time.time()
-
-
     dataframe = get_market_data(
         symbol,
         interval,
@@ -205,12 +181,25 @@ def _get_data(
     # SUCCESS
     # -----------------------------------------------------
 
-    if dataframe is not None and not dataframe.empty:
+    if (
+        dataframe is not None
+        and not dataframe.empty
+    ):
 
         _MARKET_DATA.setdefault(
             symbol,
             {}
         )[interval] = dataframe
+
+        _LAST_REQUEST.setdefault(
+            symbol,
+            {}
+        )[interval] = time.time()
+
+        print(
+            f"[{symbol} {interval}] "
+            "Market data updated successfully."
+        )
 
         return dataframe
 
@@ -218,19 +207,17 @@ def _get_data(
     # -----------------------------------------------------
     # FAILED REQUEST
     #
-    # اگر قبلاً داده معتبر داریم،
-    # همان را نگه می‌داریم.
+    # اگر داده قبلی داریم، همان را استفاده می‌کنیم.
     # -----------------------------------------------------
 
-    if existing is not None:
+    if cached is not None:
 
         print(
             f"[{symbol} {interval}] "
-            "Request failed; "
-            "using previous data."
+            "Request failed; using cached data."
         )
 
-        return existing
+        return cached
 
 
     return None
@@ -244,28 +231,24 @@ def check_market(symbol):
 
     print()
     print("=" * 60)
+
     print(
         f"========== {symbol} =========="
     )
+
     print("=" * 60)
 
 
     try:
 
         df15 = None
-        df5 = None
-        df1 = None
 
 
         # =================================================
-        # SCALPER
+        # 15M TREND
         # =================================================
 
         if STRATEGY_MODE == "SCALPER":
-
-            # ---------------------------------------------
-            # 15M TREND
-            # ---------------------------------------------
 
             print(
                 f"[{symbol}] "
@@ -273,14 +256,17 @@ def check_market(symbol):
             )
 
 
-            df15 = _get_data(
+            df15 = _get_smart_market_data(
                 symbol,
                 "15min",
                 CANDLE_LIMIT_15M
             )
 
 
-            if df15 is None or df15.empty:
+            if (
+                df15 is None
+                or df15.empty
+            ):
 
                 print(
                     f"[{symbol}] "
@@ -300,14 +286,17 @@ def check_market(symbol):
         )
 
 
-        df5 = _get_data(
+        df5 = _get_smart_market_data(
             symbol,
             "5min",
             CANDLE_LIMIT_5M
         )
 
 
-        if df5 is None or df5.empty:
+        if (
+            df5 is None
+            or df5.empty
+        ):
 
             print(
                 f"[{symbol}] "
@@ -327,14 +316,17 @@ def check_market(symbol):
         )
 
 
-        df1 = _get_data(
+        df1 = _get_smart_market_data(
             symbol,
             ENTRY_TIMEFRAME,
             CANDLE_LIMIT_1M
         )
 
 
-        if df1 is None or df1.empty:
+        if (
+            df1 is None
+            or df1.empty
+        ):
 
             print(
                 f"[{symbol}] "
@@ -379,10 +371,6 @@ def check_market(symbol):
         )
 
 
-        # =================================================
-        # BASIC VALUES
-        # =================================================
-
         signal = result.get(
             "signal",
             "NO SIGNAL"
@@ -393,15 +381,6 @@ def check_market(symbol):
             0
         )
 
-        price = result.get(
-            "price"
-        )
-
-        trend = result.get(
-            "trend",
-            "NONE"
-        )
-
         confidence = result.get(
             "confidence",
             score
@@ -410,6 +389,15 @@ def check_market(symbol):
         quality = result.get(
             "quality",
             "UNKNOWN"
+        )
+
+        price = result.get(
+            "price"
+        )
+
+        trend = result.get(
+            "trend",
+            "NONE"
         )
 
 
@@ -462,7 +450,7 @@ def check_market(symbol):
 
 
         # =================================================
-        # SIGNAL DISPLAY
+        # BUY
         # =================================================
 
         if signal == "BUY":
@@ -484,10 +472,10 @@ def check_market(symbol):
                 f"Entry: {price}"
             )
 
-            print(
-                f"Score: {score}/100"
-            )
 
+        # =================================================
+        # SELL
+        # =================================================
 
         elif signal == "SELL":
 
@@ -508,10 +496,10 @@ def check_market(symbol):
                 f"Entry: {price}"
             )
 
-            print(
-                f"Score: {score}/100"
-            )
 
+        # =================================================
+        # NO SIGNAL
+        # =================================================
 
         else:
 
@@ -537,53 +525,7 @@ def check_market(symbol):
 
 
 # =========================================================
-# CACHE STATUS
-# =========================================================
-
-def print_main_cache_status():
-
-    print()
-    print(
-        "========== MAIN CACHE =========="
-    )
-
-
-    if not _MARKET_DATA:
-
-        print(
-            "Main cache is empty."
-        )
-
-        print(
-            "================================"
-        )
-
-        return
-
-
-    for symbol, intervals in _MARKET_DATA.items():
-
-        for interval, dataframe in intervals.items():
-
-            rows = (
-                len(dataframe)
-                if dataframe is not None
-                else 0
-            )
-
-            print(
-                f"{symbol} {interval} "
-                f"| Rows: {rows}"
-            )
-
-
-    print(
-        "================================"
-    )
-
-
-# =========================================================
-# MAIN LOOP
+# MAIN
 # =========================================================
 
 def main():
@@ -625,15 +567,18 @@ def main():
     )
 
     print(
-        "   15M → every 15 minutes"
+        f"   15M → every "
+        f"{TREND_REFRESH_SECONDS // 60} minutes"
     )
 
     print(
-        "   5M  → every 5 minutes"
+        f"   5M  → every "
+        f"{CONFIRMATION_REFRESH_SECONDS // 60} minutes"
     )
 
     print(
-        "   1M  → every 3 minutes"
+        f"   1M  → every "
+        f"{ENTRY_REFRESH_SECONDS // 60} minutes"
     )
 
     print()
