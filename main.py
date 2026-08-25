@@ -11,8 +11,35 @@ from config import (
 )
 
 from data_feed import get_market_data
-
 from telegram_bot import send_goldpro_signal
+
+
+# =========================================================
+# GOLDPRO+ MAIN V3
+#
+# وظایف:
+#
+# 1. دریافت 15M / 5M / 1M
+# 2. اجرای Scalper Strategy
+# 3. ارسال فقط سیگنال معتبر
+# 4. جلوگیری از ارسال سیگنال ناقص
+# 5. جلوگیری از ارسال تکراری
+#
+# =========================================================
+
+
+# =========================================================
+# LAST SENT SIGNAL
+# =========================================================
+
+# برای جلوگیری از ارسال چندباره یک سیگنال
+#
+# مثال:
+# BUY 4637.88696
+#
+# فقط یک بار ارسال می‌شود.
+#
+LAST_SENT_SIGNAL = None
 
 
 # =========================================================
@@ -26,7 +53,7 @@ if STRATEGY_MODE == "SCALPER":
     )
 
     print(
-        "🧠 Strategy Loaded: GoldPro+ Scalper V2"
+        "🧠 Strategy Loaded: GoldPro+ Scalper V3"
     )
 
 else:
@@ -41,23 +68,305 @@ else:
 
 
 # =========================================================
+# VALIDATE SCALPER SIGNAL
+# =========================================================
+
+def validate_scalper_signal(result):
+
+    """
+    بررسی می‌کند که آیا سیگنال Scalper
+    واقعاً تمام شروط لازم را دارد یا خیر.
+
+    برای BUY / SELL باید:
+
+    15M Trend       = OK
+    5M EMA9         = OK
+    1M RSI          = OK
+    1M Candle       = OK
+    Candlestick     = OK
+
+    اگر هر کدام WAIT باشد:
+        سیگنال ارسال نمی‌شود.
+    """
+
+    signal = result.get(
+        "signal",
+        "NO SIGNAL"
+    )
+
+    if signal not in (
+        "BUY",
+        "SELL"
+    ):
+
+        return False, "Signal is not BUY/SELL"
+
+
+    reasons = result.get(
+        "reasons",
+        []
+    )
+
+
+    # ---------------------------------------------------------
+    # تمام دلایل را بررسی می‌کنیم
+    # ---------------------------------------------------------
+
+    for reason in reasons:
+
+        reason_text = str(
+            reason
+        ).upper()
+
+
+        # هر WAIT یعنی setup کامل نیست
+        if "WAIT:" in reason_text:
+
+            return False, (
+                f"Unconfirmed condition: {reason}"
+            )
+
+
+        # هر FAIL یعنی setup نامعتبر است
+        if "FAIL:" in reason_text:
+
+            return False, (
+                f"Failed condition: {reason}"
+            )
+
+
+        # هر INVALID یعنی setup نامعتبر است
+        if "INVALID:" in reason_text:
+
+            return False, (
+                f"Invalid condition: {reason}"
+            )
+
+
+    # ---------------------------------------------------------
+    # بررسی کیفیت
+    # ---------------------------------------------------------
+
+    quality = str(
+        result.get(
+            "quality",
+            ""
+        )
+    ).upper()
+
+
+    if quality == "WEAK":
+
+        return False, (
+            "Signal quality is WEAK"
+        )
+
+
+    # ---------------------------------------------------------
+    # بررسی Score
+    # ---------------------------------------------------------
+
+    score = result.get(
+        "score",
+        0
+    )
+
+
+    try:
+
+        score = float(
+            score
+        )
+
+    except Exception:
+
+        return False, (
+            "Invalid score"
+        )
+
+
+    # ---------------------------------------------------------
+    # حداقل Score برای ارسال
+    # ---------------------------------------------------------
+
+    if score < 70:
+
+        return False, (
+            f"Score too low: {score}"
+        )
+
+
+    # ---------------------------------------------------------
+    # اگر همه چیز OK بود
+    # ---------------------------------------------------------
+
+    return True, (
+        "All conditions confirmed"
+    )
+
+
+# =========================================================
+# DUPLICATE PROTECTION
+# =========================================================
+
+def is_duplicate_signal(
+    symbol,
+    result
+):
+
+    global LAST_SENT_SIGNAL
+
+
+    signal = result.get(
+        "signal",
+        "NO SIGNAL"
+    )
+
+
+    price = result.get(
+        "price"
+    )
+
+
+    if signal not in (
+        "BUY",
+        "SELL"
+    ):
+
+        return False
+
+
+    if price is None:
+
+        return False
+
+
+    try:
+
+        price = float(
+            price
+        )
+
+    except Exception:
+
+        return False
+
+
+    # ---------------------------------------------------------
+    # ساخت شناسه سیگنال
+    #
+    # Entry را تا 2 رقم اعشار گرد می‌کنیم
+    # تا تغییرات بسیار کوچک قیمت باعث ارسال دوباره نشود.
+    # ---------------------------------------------------------
+
+    fingerprint = (
+        symbol,
+        signal,
+        round(
+            price,
+            2
+        )
+    )
+
+
+    # ---------------------------------------------------------
+    # بررسی تکراری بودن
+    # ---------------------------------------------------------
+
+    if fingerprint == LAST_SENT_SIGNAL:
+
+        return True
+
+
+    return False
+
+
+# =========================================================
+# MARK SIGNAL AS SENT
+# =========================================================
+
+def mark_signal_as_sent(
+    symbol,
+    result
+):
+
+    global LAST_SENT_SIGNAL
+
+
+    signal = result.get(
+        "signal",
+        "NO SIGNAL"
+    )
+
+
+    price = result.get(
+        "price"
+    )
+
+
+    if signal not in (
+        "BUY",
+        "SELL"
+    ):
+
+        return
+
+
+    if price is None:
+
+        return
+
+
+    try:
+
+        price = float(
+            price
+        )
+
+    except Exception:
+
+        return
+
+
+    LAST_SENT_SIGNAL = (
+        symbol,
+        signal,
+        round(
+            price,
+            2
+        )
+    )
+
+
+# =========================================================
 # MARKET CHECK
 # =========================================================
 
 def check_market(symbol):
 
     print()
-    print("=" * 60)
-    print(f"========== {symbol} ==========")
-    print("=" * 60)
+
+    print(
+        "=" * 60
+    )
+
+    print(
+        f"========== {symbol} =========="
+    )
+
+    print(
+        "=" * 60
+    )
+
 
     try:
 
-        # =================================================
+        # =====================================================
         # 15M DATA
-        # =================================================
+        # =====================================================
 
         df15 = None
+
 
         if STRATEGY_MODE == "SCALPER":
 
@@ -65,13 +374,18 @@ def check_market(symbol):
                 f"[{symbol}] Getting 15M trend data..."
             )
 
+
             df15 = get_market_data(
                 symbol,
                 "15min",
                 CANDLE_LIMIT_15M
             )
 
-            if df15 is None or df15.empty:
+
+            if (
+                df15 is None
+                or df15.empty
+            ):
 
                 print(
                     f"[{symbol}] No 15M data received"
@@ -79,13 +393,15 @@ def check_market(symbol):
 
                 return
 
-        # =================================================
+
+        # =====================================================
         # 5M DATA
-        # =================================================
+        # =====================================================
 
         print(
             f"[{symbol}] Getting 5M data..."
         )
+
 
         df5 = get_market_data(
             symbol,
@@ -93,7 +409,11 @@ def check_market(symbol):
             CANDLE_LIMIT_5M
         )
 
-        if df5 is None or df5.empty:
+
+        if (
+            df5 is None
+            or df5.empty
+        ):
 
             print(
                 f"[{symbol}] No 5M data received"
@@ -101,13 +421,15 @@ def check_market(symbol):
 
             return
 
-        # =================================================
+
+        # =====================================================
         # 1M DATA
-        # =================================================
+        # =====================================================
 
         print(
             f"[{symbol}] Getting 1M data..."
         )
+
 
         df1 = get_market_data(
             symbol,
@@ -115,7 +437,11 @@ def check_market(symbol):
             CANDLE_LIMIT_1M
         )
 
-        if df1 is None or df1.empty:
+
+        if (
+            df1 is None
+            or df1.empty
+        ):
 
             print(
                 f"[{symbol}] No 1M data received"
@@ -123,9 +449,10 @@ def check_market(symbol):
 
             return
 
-        # =================================================
+
+        # =====================================================
         # GENERATE SIGNAL
-        # =================================================
+        # =====================================================
 
         if STRATEGY_MODE == "SCALPER":
 
@@ -142,9 +469,26 @@ def check_market(symbol):
                 df1
             )
 
-        # =================================================
+
+        # =====================================================
+        # SAFETY
+        # =====================================================
+
+        if not isinstance(
+            result,
+            dict
+        ):
+
+            print(
+                "❌ Strategy returned invalid result."
+            )
+
+            return
+
+
+        # =====================================================
         # RESULT
-        # =================================================
+        # =====================================================
 
         print()
 
@@ -156,38 +500,49 @@ def check_market(symbol):
             result
         )
 
+
+        # =====================================================
+        # READ RESULT
+        # =====================================================
+
         signal = result.get(
             "signal",
             "NO SIGNAL"
         )
+
 
         score = result.get(
             "score",
             0
         )
 
+
         confidence = result.get(
             "confidence",
             0
         )
+
 
         quality = result.get(
             "quality",
             "UNKNOWN"
         )
 
+
         price = result.get(
             "price"
         )
+
 
         trend = result.get(
             "trend",
             "NONE"
         )
 
-        # =================================================
+
+        # =====================================================
         # DISPLAY
-        # =================================================
+        # =====================================================
 
         print()
 
@@ -195,48 +550,55 @@ def check_market(symbol):
             f"📈 Trend: {trend}"
         )
 
+
         print(
             f"🎯 Signal: {signal}"
         )
+
 
         print(
             f"⭐ Score: {score}/100"
         )
 
+
         print(
             f"💪 Confidence: {confidence}%"
         )
+
 
         print(
             f"🏷️ Quality: {quality}"
         )
 
+
         print(
             f"💰 Price: {price}"
         )
 
-        # =================================================
-        # REASONS
-        # =================================================
 
-        for reason in result.get(
+        # =====================================================
+        # REASONS
+        # =====================================================
+
+        reasons = result.get(
             "reasons",
             []
-        ):
+        )
+
+
+        for reason in reasons:
 
             print(
                 " •",
                 reason
             )
 
-        # =================================================
-        # TELEGRAM
-        #
-        # فقط BUY و SELL
-        # NO SIGNAL ارسال نمی‌شود
-        # =================================================
 
-        if signal in (
+        # =====================================================
+        # ONLY BUY / SELL
+        # =====================================================
+
+        if signal not in (
             "BUY",
             "SELL"
         ):
@@ -244,37 +606,142 @@ def check_market(symbol):
             print()
 
             print(
-                "📱 Sending signal to Telegram..."
+                "⚪ GOLDPRO+ WAITING / NO SIGNAL"
             )
 
-            telegram_ok = send_goldpro_signal(
-                symbol,
-                result
+            return
+
+
+        # =====================================================
+        # SCALPER VALIDATION
+        # =====================================================
+
+        if STRATEGY_MODE == "SCALPER":
+
+            valid, validation_message = (
+                validate_scalper_signal(
+                    result
+                )
             )
 
-            if telegram_ok:
+
+            if not valid:
+
+                print()
 
                 print(
-                    "✅ Telegram signal sent."
+                    "🛑 SIGNAL REJECTED"
                 )
 
-            else:
 
                 print(
-                    "❌ Telegram signal was not sent."
+                    f"   Reason: {validation_message}"
                 )
 
-        else:
+
+                print(
+                    "   Telegram: NOT SENT"
+                )
+
+
+                return
+
+
+        # =====================================================
+        # DUPLICATE CHECK
+        # =====================================================
+
+        if is_duplicate_signal(
+            symbol,
+            result
+        ):
 
             print()
 
             print(
-                "⚪ GOLDPRO+ WAITING / NO SIGNAL"
+                "🔁 DUPLICATE SIGNAL"
             )
 
-    # =====================================================
+
+            print(
+                "   Telegram: NOT SENT"
+            )
+
+
+            return
+
+
+        # =====================================================
+        # VALID SIGNAL
+        # =====================================================
+
+        print()
+
+        print(
+            "🟢 =============================="
+        )
+
+
+        print(
+            f"🟢 GOLDPRO+ {signal} SIGNAL"
+        )
+
+
+        print(
+            "🟢 =============================="
+        )
+
+
+        print(
+            f"Entry: {price}"
+        )
+
+
+        # =====================================================
+        # TELEGRAM
+        # =====================================================
+
+        print()
+
+        print(
+            "📱 Sending signal to Telegram..."
+        )
+
+
+        telegram_ok = send_goldpro_signal(
+            symbol,
+            result
+        )
+
+
+        if telegram_ok:
+
+            mark_signal_as_sent(
+                symbol,
+                result
+            )
+
+
+            print(
+                "✅ Telegram signal sent."
+            )
+
+
+            print(
+                "🔒 Signal marked as sent."
+            )
+
+
+        else:
+
+            print(
+                "❌ Telegram signal was not sent."
+            )
+
+
+    # =========================================================
     # MARKET ERROR
-    # =====================================================
+    # =========================================================
 
     except Exception as exc:
 
@@ -283,6 +750,7 @@ def check_market(symbol):
         print(
             f"❌ [{symbol}] Market check error:"
         )
+
 
         print(
             repr(exc)
@@ -301,13 +769,16 @@ def main():
         "🟡 GoldPro+ Signal Bot Started"
     )
 
+
     print(
         f"📊 Markets: {MARKETS}"
     )
 
+
     print(
         f"⚙️ Mode: {STRATEGY_MODE}"
     )
+
 
     if STRATEGY_MODE == "SCALPER":
 
@@ -316,27 +787,34 @@ def main():
             "15M Trend → 5M Confirmation → 1M Entry"
         )
 
+
         print(
             "💡 API optimization:"
         )
+
 
         print(
             "   15M → every 30 minutes"
         )
 
+
         print(
             "   5M  → every 10 minutes"
         )
+
 
         print(
             "   1M  → every 3 minutes"
         )
 
+
     else:
 
         print(
-            "📈 Strategy: 5M Trend → 1M Entry"
+            "📈 Strategy: "
+            "5M Trend → 1M Entry"
         )
+
 
     print()
 
@@ -344,8 +822,9 @@ def main():
         "⏳ Waiting for market data..."
     )
 
+
     # =====================================================
-    # LOOP
+    # MAIN LOOP
     # =====================================================
 
     while True:
@@ -358,6 +837,7 @@ def main():
                     symbol
                 )
 
+
             print()
 
             print(
@@ -365,9 +845,11 @@ def main():
                 f"{CHECK_DELAY_SECONDS} seconds..."
             )
 
+
             time.sleep(
                 CHECK_DELAY_SECONDS
             )
+
 
         except KeyboardInterrupt:
 
@@ -379,6 +861,7 @@ def main():
 
             break
 
+
         except Exception as exc:
 
             print()
@@ -387,9 +870,11 @@ def main():
                 "❌ Main loop error:"
             )
 
+
             print(
                 repr(exc)
             )
+
 
             time.sleep(
                 5
