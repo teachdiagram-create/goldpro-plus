@@ -349,22 +349,25 @@ def check_market(symbol):
                 df1
             )
 
-        else:
+                else:
 
             result = generate_goldpro_plus_signal(
                 df5,
                 df1
             )
-# =================================================
-# TELEGRAM AUTO SIGNAL
-# =================================================
 
-if result.get("signal") in ("BUY", "SELL"):
 
-    send_goldpro_signal(
-        symbol,
-        result
-    )
+        # =================================================
+        # TELEGRAM AUTO SIGNAL
+        # =================================================
+
+        if result.get("signal") in ("BUY", "SELL"):
+
+            send_goldpro_signal(
+                symbol,
+                result
+            )
+
 
         # =================================================
         # RESULT
