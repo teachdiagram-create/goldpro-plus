@@ -100,6 +100,28 @@ def format_signal_message(symbol, result):
         "NONE"
     )
 
+    trend_phase = result.get(
+        "trend_phase",
+        "UNKNOWN"
+    )
+
+    entry_timing_ok = result.get(
+        "entry_timing_ok",
+        False
+    )
+
+    recent_high = result.get(
+        "recent_high"
+    )
+
+    recent_low = result.get(
+        "recent_low"
+    )
+
+    extension_atr = result.get(
+        "extension_atr"
+    )
+
     reasons = result.get(
         "reasons",
         []
@@ -125,6 +147,8 @@ def format_signal_message(symbol, result):
         f"💵 Entry: {price}\n"
         f"\n"
         f"📈 Trend: {trend}\n"
+        f"🧭 Trend Phase: {trend_phase}\n"
+        f"⏱️ Entry Timing: {'OK' if entry_timing_ok else 'FILTERED'}\n"
         f"⭐ Score: {score}/100\n"
         f"💪 Confidence: {confidence}%\n"
         f"🏷️ Quality: {quality}\n"

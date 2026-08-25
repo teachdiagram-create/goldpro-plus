@@ -53,7 +53,7 @@ if STRATEGY_MODE == "SCALPER":
     )
 
     print(
-        "🧠 Strategy Loaded: GoldPro+ Scalper V3"
+        "🧠 Strategy Loaded: GoldPro+ Scalper V4"
     )
 
 else:
@@ -119,11 +119,14 @@ def validate_scalper_signal(result):
         ).upper()
 
 
-        # هر WAIT یعنی setup کامل نیست
-        if "WAIT:" in reason_text:
+        # در V4، WAIT می‌تواند فقط وضعیت یک عامل غیرضروری باشد.
+        # Strategy فقط وقتی BUY/SELL می‌دهد که timing filter و شرایط سخت ورود تأیید شده باشند.
+        # بنابراین فقط BLOCK/FAIL/INVALID باید سیگنال را رد کنند.
+
+        if "BLOCK:" in reason_text:
 
             return False, (
-                f"Unconfirmed condition: {reason}"
+                f"Blocked condition: {reason}"
             )
 
 
@@ -189,7 +192,7 @@ def validate_scalper_signal(result):
     # حداقل Score برای ارسال
     # ---------------------------------------------------------
 
-    if score < 70:
+    if score < 75:
 
         return False, (
             f"Score too low: {score}"
