@@ -1,5 +1,4 @@
 import time
-from telegram_bot import send_goldpro_signal
 
 from config import (
     MARKETS,
@@ -9,13 +8,11 @@ from config import (
     CANDLE_LIMIT_5M,
     CANDLE_LIMIT_1M,
     CHECK_DELAY_SECONDS,
-
-    TREND_REFRESH_SECONDS,
-    CONFIRMATION_REFRESH_SECONDS,
-    ENTRY_REFRESH_SECONDS,
 )
 
 from data_feed import get_market_data
+
+from telegram_bot import send_goldpro_signal
 
 
 # =========================================================
@@ -24,10 +21,12 @@ from data_feed import get_market_data
 
 if STRATEGY_MODE == "SCALPER":
 
-    from scalper_strategy import generate_scalper_signal
+    from scalper_strategy import (
+        generate_scalper_signal
+    )
 
     print(
-        "🧠 Strategy Loaded: GoldPro+ Scalper V1"
+        "🧠 Strategy Loaded: GoldPro+ Scalper V2"
     )
 
 else:
@@ -42,189 +41,6 @@ else:
 
 
 # =========================================================
-# MEMORY CACHE
-# =========================================================
-
-_MARKET_DATA = {}
-
-
-# =========================================================
-# LAST SUCCESSFUL REQUEST
-# =========================================================
-
-_LAST_REQUEST = {}
-
-
-# =========================================================
-# REFRESH INTERVALS
-# =========================================================
-
-REFRESH_INTERVALS = {
-
-    "15min":
-        TREND_REFRESH_SECONDS,
-
-    "5min":
-        CONFIRMATION_REFRESH_SECONDS,
-
-    "1min":
-        ENTRY_REFRESH_SECONDS,
-}
-
-
-# =========================================================
-# GET CACHED DATA
-# =========================================================
-
-def _get_memory_data(
-    symbol,
-    interval
-):
-
-    return (
-        _MARKET_DATA
-        .get(symbol, {})
-        .get(interval)
-    )
-
-
-# =========================================================
-# SHOULD REFRESH
-# =========================================================
-
-def _should_refresh(
-    symbol,
-    interval
-):
-
-    now = time.time()
-
-    last = (
-        _LAST_REQUEST
-        .get(symbol, {})
-        .get(interval)
-    )
-
-    # اولین درخواست
-    if last is None:
-        return True
-
-    refresh_time = REFRESH_INTERVALS.get(
-        interval,
-        300
-    )
-
-    return (
-        now - last
-    ) >= refresh_time
-
-
-# =========================================================
-# GET MARKET DATA SMART
-# =========================================================
-
-def _get_smart_market_data(
-    symbol,
-    interval,
-    outputsize
-):
-
-    cached = _get_memory_data(
-        symbol,
-        interval
-    )
-
-
-    # -----------------------------------------------------
-    # USE CACHE
-    # -----------------------------------------------------
-
-    if not _should_refresh(
-        symbol,
-        interval
-    ):
-
-        if cached is not None:
-
-            print(
-                f"[{symbol} {interval}] "
-                "Using main memory cache."
-            )
-
-            return cached
-
-        # اگر cache نداریم،
-        # درخواست اجباری است.
-        print(
-            f"[{symbol} {interval}] "
-            "No memory cache available."
-        )
-
-
-    # -----------------------------------------------------
-    # REQUEST
-    # -----------------------------------------------------
-
-    print(
-        f"[{symbol} {interval}] "
-        "Refreshing market data..."
-    )
-
-
-    dataframe = get_market_data(
-        symbol,
-        interval,
-        outputsize
-    )
-
-
-    # -----------------------------------------------------
-    # SUCCESS
-    # -----------------------------------------------------
-
-    if (
-        dataframe is not None
-        and not dataframe.empty
-    ):
-
-        _MARKET_DATA.setdefault(
-            symbol,
-            {}
-        )[interval] = dataframe
-
-        _LAST_REQUEST.setdefault(
-            symbol,
-            {}
-        )[interval] = time.time()
-
-        print(
-            f"[{symbol} {interval}] "
-            "Market data updated successfully."
-        )
-
-        return dataframe
-
-
-    # -----------------------------------------------------
-    # FAILED REQUEST
-    #
-    # اگر داده قبلی داریم، همان را استفاده می‌کنیم.
-    # -----------------------------------------------------
-
-    if cached is not None:
-
-        print(
-            f"[{symbol} {interval}] "
-            "Request failed; using cached data."
-        )
-
-        return cached
-
-
-    return None
-
-
-# =========================================================
 # MARKET CHECK
 # =========================================================
 
@@ -232,113 +48,83 @@ def check_market(symbol):
 
     print()
     print("=" * 60)
-
-    print(
-        f"========== {symbol} =========="
-    )
-
+    print(f"========== {symbol} ==========")
     print("=" * 60)
-
 
     try:
 
+        # =================================================
+        # 15M DATA
+        # =================================================
+
         df15 = None
-
-
-        # =================================================
-        # 15M TREND
-        # =================================================
 
         if STRATEGY_MODE == "SCALPER":
 
             print(
-                f"[{symbol}] "
-                "Getting 15M trend data..."
+                f"[{symbol}] Getting 15M trend data..."
             )
 
-
-            df15 = _get_smart_market_data(
+            df15 = get_market_data(
                 symbol,
                 "15min",
                 CANDLE_LIMIT_15M
             )
 
-
-            if (
-                df15 is None
-                or df15.empty
-            ):
+            if df15 is None or df15.empty:
 
                 print(
-                    f"[{symbol}] "
-                    "No 15M data received"
+                    f"[{symbol}] No 15M data received"
                 )
 
                 return
 
-
         # =================================================
-        # 5M CONFIRMATION
+        # 5M DATA
         # =================================================
 
         print(
-            f"[{symbol}] "
-            "Getting 5M data..."
+            f"[{symbol}] Getting 5M data..."
         )
 
-
-        df5 = _get_smart_market_data(
+        df5 = get_market_data(
             symbol,
             "5min",
             CANDLE_LIMIT_5M
         )
 
-
-        if (
-            df5 is None
-            or df5.empty
-        ):
+        if df5 is None or df5.empty:
 
             print(
-                f"[{symbol}] "
-                "No 5M data received"
+                f"[{symbol}] No 5M data received"
             )
 
             return
 
-
         # =================================================
-        # 1M ENTRY
+        # 1M DATA
         # =================================================
 
         print(
-            f"[{symbol}] "
-            "Getting 1M data..."
+            f"[{symbol}] Getting 1M data..."
         )
 
-
-        df1 = _get_smart_market_data(
+        df1 = get_market_data(
             symbol,
             ENTRY_TIMEFRAME,
             CANDLE_LIMIT_1M
         )
 
-
-        if (
-            df1 is None
-            or df1.empty
-        ):
+        if df1 is None or df1.empty:
 
             print(
-                f"[{symbol}] "
-                "No 1M data received"
+                f"[{symbol}] No 1M data received"
             )
 
             return
 
-
         # =================================================
-        # STRATEGY
+        # GENERATE SIGNAL
         # =================================================
 
         if STRATEGY_MODE == "SCALPER":
@@ -349,25 +135,12 @@ def check_market(symbol):
                 df1
             )
 
-                else:
+        else:
 
             result = generate_goldpro_plus_signal(
                 df5,
                 df1
             )
-
-
-        # =================================================
-        # TELEGRAM AUTO SIGNAL
-        # =================================================
-
-        if result.get("signal") in ("BUY", "SELL"):
-
-            send_goldpro_signal(
-                symbol,
-                result
-            )
-
 
         # =================================================
         # RESULT
@@ -383,7 +156,6 @@ def check_market(symbol):
             result
         )
 
-
         signal = result.get(
             "signal",
             "NO SIGNAL"
@@ -396,7 +168,7 @@ def check_market(symbol):
 
         confidence = result.get(
             "confidence",
-            score
+            0
         )
 
         quality = result.get(
@@ -412,7 +184,6 @@ def check_market(symbol):
             "trend",
             "NONE"
         )
-
 
         # =================================================
         # DISPLAY
@@ -444,12 +215,9 @@ def check_market(symbol):
             f"💰 Price: {price}"
         )
 
-
         # =================================================
         # REASONS
         # =================================================
-
-        print()
 
         for reason in result.get(
             "reasons",
@@ -461,58 +229,40 @@ def check_market(symbol):
                 reason
             )
 
-
         # =================================================
-        # BUY
+        # TELEGRAM
+        #
+        # فقط BUY و SELL
+        # NO SIGNAL ارسال نمی‌شود
         # =================================================
 
-        if signal == "BUY":
+        if signal in (
+            "BUY",
+            "SELL"
+        ):
 
             print()
-            print(
-                "🟢 =============================="
-            )
 
             print(
-                "🟢 GOLDPRO+ BUY SIGNAL"
+                "📱 Sending signal to Telegram..."
             )
 
-            print(
-                "🟢 =============================="
+            telegram_ok = send_goldpro_signal(
+                symbol,
+                result
             )
 
-            print(
-                f"Entry: {price}"
-            )
+            if telegram_ok:
 
+                print(
+                    "✅ Telegram signal sent."
+                )
 
-        # =================================================
-        # SELL
-        # =================================================
+            else:
 
-        elif signal == "SELL":
-
-            print()
-            print(
-                "🔴 =============================="
-            )
-
-            print(
-                "🔴 GOLDPRO+ SELL SIGNAL"
-            )
-
-            print(
-                "🔴 =============================="
-            )
-
-            print(
-                f"Entry: {price}"
-            )
-
-
-        # =================================================
-        # NO SIGNAL
-        # =================================================
+                print(
+                    "❌ Telegram signal was not sent."
+                )
 
         else:
 
@@ -522,14 +272,16 @@ def check_market(symbol):
                 "⚪ GOLDPRO+ WAITING / NO SIGNAL"
             )
 
+    # =====================================================
+    # MARKET ERROR
+    # =====================================================
 
     except Exception as exc:
 
         print()
 
         print(
-            f"❌ [{symbol}] "
-            "Market check error:"
+            f"❌ [{symbol}] Market check error:"
         )
 
         print(
@@ -538,7 +290,7 @@ def check_market(symbol):
 
 
 # =========================================================
-# MAIN
+# MAIN LOOP
 # =========================================================
 
 def main():
@@ -557,7 +309,6 @@ def main():
         f"⚙️ Mode: {STRATEGY_MODE}"
     )
 
-
     if STRATEGY_MODE == "SCALPER":
 
         print(
@@ -565,34 +316,27 @@ def main():
             "15M Trend → 5M Confirmation → 1M Entry"
         )
 
+        print(
+            "💡 API optimization:"
+        )
+
+        print(
+            "   15M → every 30 minutes"
+        )
+
+        print(
+            "   5M  → every 10 minutes"
+        )
+
+        print(
+            "   1M  → every 3 minutes"
+        )
+
     else:
 
         print(
-            "📈 Strategy: "
-            "5M Trend → 1M Entry"
+            "📈 Strategy: 5M Trend → 1M Entry"
         )
-
-
-    print()
-
-    print(
-        "💡 API optimization:"
-    )
-
-    print(
-        f"   15M → every "
-        f"{TREND_REFRESH_SECONDS // 60} minutes"
-    )
-
-    print(
-        f"   5M  → every "
-        f"{CONFIRMATION_REFRESH_SECONDS // 60} minutes"
-    )
-
-    print(
-        f"   1M  → every "
-        f"{ENTRY_REFRESH_SECONDS // 60} minutes"
-    )
 
     print()
 
@@ -600,6 +344,9 @@ def main():
         "⏳ Waiting for market data..."
     )
 
+    # =====================================================
+    # LOOP
+    # =====================================================
 
     while True:
 
@@ -611,7 +358,6 @@ def main():
                     symbol
                 )
 
-
             print()
 
             print(
@@ -619,11 +365,9 @@ def main():
                 f"{CHECK_DELAY_SECONDS} seconds..."
             )
 
-
             time.sleep(
                 CHECK_DELAY_SECONDS
             )
-
 
         except KeyboardInterrupt:
 
@@ -634,7 +378,6 @@ def main():
             )
 
             break
-
 
         except Exception as exc:
 
@@ -648,7 +391,9 @@ def main():
                 repr(exc)
             )
 
-            time.sleep(5)
+            time.sleep(
+                5
+            )
 
 
 # =========================================================
