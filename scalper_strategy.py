@@ -1305,5 +1305,20 @@ def generate_scalper_signal(
 
         "pattern":
             pattern,
+        
+        "pattern_direction":
+            pattern_direction,
+
+        "reasons":
+            reasons,
+
+        "time":
+            str(
+                last1.get(
+                    "time",
+                    ""
+                )
+            ),
+    }
 
         
