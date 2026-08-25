@@ -122,6 +122,23 @@ def format_signal_message(symbol, result):
         "extension_atr"
     )
 
+    wave_stage = result.get(
+        "wave_stage",
+        "UNKNOWN"
+    )
+
+    wave_position = result.get(
+        "wave_position"
+    )
+
+    wave_low = result.get(
+        "wave_low"
+    )
+
+    wave_high = result.get(
+        "wave_high"
+    )
+
     reasons = result.get(
         "reasons",
         []
@@ -148,6 +165,7 @@ def format_signal_message(symbol, result):
         f"\n"
         f"📈 Trend: {trend}\n"
         f"🧭 Trend Phase: {trend_phase}\n"
+        f"🌊 Wave Stage: {wave_stage}\n"
         f"⏱️ Entry Timing: {'OK' if entry_timing_ok else 'FILTERED'}\n"
         f"⭐ Score: {score}/100\n"
         f"💪 Confidence: {confidence}%\n"
@@ -157,6 +175,23 @@ def format_signal_message(symbol, result):
         f"15M Trend → 5M Confirmation → 1M Entry"
     )
 
+
+    if wave_position is not None:
+
+        try:
+            wave_position_text = f"{float(wave_position) * 100:.1f}%"
+        except Exception:
+            wave_position_text = str(wave_position)
+
+        message += (
+            f"\n📍 Wave Position: {wave_position_text}"
+        )
+
+    if wave_low is not None and wave_high is not None:
+
+        message += (
+            f"\n🌊 Wave: {wave_low} → {wave_high}"
+        )
 
     if reasons:
 

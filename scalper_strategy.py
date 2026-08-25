@@ -1,14 +1,15 @@
 # =========================================================
-# GoldPro+ Scalper V4
+# GoldPro+ Scalper V5
 #
-# 15M Trend -> 5M Momentum -> 1M Pullback/Entry
+# 15M Trend -> 5M Momentum/Structure -> 1M Entry
 #
-# V4 هدف:
-# - تشخیص سریع تغییر روند
-# - جلوگیری از ورود در انتهای حرکت
-# - جلوگیری از تعقیب قیمت نزدیک سقف/کف
-# - ترجیح Pullback + Continuation
-# - حتی Score=100 بدون Entry-Quality اجازه ورود ندارد
+# V5 focus:
+# - detect trend changes faster through 5M structure
+# - distinguish TREND STRENGTH from ENTRY QUALITY
+# - detect the current impulse wave
+# - block chasing an already extended move
+# - require a REAL pullback/reclaim for mature/late moves
+# - score never overrides structural entry blocks
 # =========================================================
 
 import pandas as pd
@@ -27,18 +28,20 @@ SIGNAL_SCORE = 75
 WATCH_SCORE = 60
 CANDLE_BODY_MIN = 0.45
 
-# V4 trend / timing filters
-RECENT_LOOKBACK_1M = 30
-RECENT_LOOKBACK_5M = 12
-TREND_CROSS_LOOKBACK_15M = 8
-TREND_CROSS_LOOKBACK_5M = 4
+# 1M wave/structure settings
+WAVE_LOOKBACK_1M = 60
+PULLBACK_LOOKBACK_1M = 15
+MIN_PULLBACK_RATIO = 0.30
+MAX_ENTRY_POSITION = 0.68
+HARD_MAX_ENTRY_POSITION = 0.78
+MIN_PULLBACK_ATR = 1.20
 
-# چند ATR از کف/سقف اخیر که بعد از آن ورود تعقیبی ممنوع است
-MAX_EXTENSION_ATR = 2.20
+# Extension / extreme filters
+MAX_EXTENSION_ATR = 2.00
 NEAR_EXTREME_ATR = 0.65
 
-# حداقل امتیاز مرحله ورود
-ENTRY_QUALITY_MIN = 75
+# Fast 5M trend-change detection
+FAST_CROSS_LOOKBACK_5M = 3
 
 
 # =========================================================
@@ -70,7 +73,7 @@ def safe_float(value):
 
 
 # =========================================================
-# ATR HELPER
+# ATR
 # =========================================================
 
 def calculate_atr(df, period=14):
@@ -80,8 +83,8 @@ def calculate_atr(df, period=14):
     high = pd.to_numeric(df["high"], errors="coerce")
     low = pd.to_numeric(df["low"], errors="coerce")
     close = pd.to_numeric(df["close"], errors="coerce")
-
     previous_close = close.shift(1)
+
     tr = pd.concat([
         high - low,
         (high - previous_close).abs(),
@@ -230,11 +233,7 @@ def _bars_since_sign_change(series, wanted_sign, max_bars=50):
 
 def get_trend_state(df15):
     if df15 is None or df15.empty or len(df15) < 25:
-        return {
-            "trend": "NONE", "age_bars": None, "phase": "UNKNOWN",
-            "ema9": None, "ema20": None, "price": None,
-            "fresh": False,
-        }
+        return {"trend": "NONE", "age_bars": None, "phase": "UNKNOWN", "ema9": None, "ema20": None, "price": None, "fresh": False}
 
     df = _ema_state(df15, EMA_TREND_FAST, EMA_TREND_SLOW)
     last = df.iloc[-1]
@@ -245,13 +244,13 @@ def get_trend_state(df15):
     if None in (price, ema9, ema20):
         return {"trend": "NONE", "age_bars": None, "phase": "UNKNOWN", "ema9": ema9, "ema20": ema20, "price": price, "fresh": False}
 
-    spread = ema9 - ema20
-    if price > ema9 and spread > 0:
+    spread = df["ema_fast"] - df["ema_slow"]
+    if price > ema9 and spread.iloc[-1] > 0:
         trend = "BUY"
-        age = _bars_since_sign_change(df["ema_fast"] - df["ema_slow"], 1)
-    elif price < ema9 and spread < 0:
+        age = _bars_since_sign_change(spread, 1)
+    elif price < ema9 and spread.iloc[-1] < 0:
         trend = "SELL"
-        age = _bars_since_sign_change(df["ema_fast"] - df["ema_slow"], -1)
+        age = _bars_since_sign_change(spread, -1)
     else:
         trend = "NONE"
         age = None
@@ -278,9 +277,13 @@ def get_trend_state(df15):
     }
 
 
+# =========================================================
+# FAST 5M TREND SHIFT
+# =========================================================
+
 def get_5m_momentum_state(df5, trend):
     if df5 is None or df5.empty or len(df5) < 25 or trend not in ("BUY", "SELL"):
-        return {"ok": False, "shift": False, "slope_ok": False, "ema9": None, "ema20": None, "age_bars": None}
+        return {"ok": False, "shift": False, "slope_ok": False, "ema9": None, "ema20": None, "age_bars": None, "spread": None}
 
     df = _ema_state(df5, 9, 20)
     spread = df["ema_fast"] - df["ema_slow"]
@@ -292,15 +295,23 @@ def get_5m_momentum_state(df5, trend):
     ema9 = safe_float(last["ema_fast"])
     ema20 = safe_float(last["ema_slow"])
     prev_ema9 = safe_float(prev["ema_fast"])
-    slope_ok = False
 
+    slope_ok = False
     if None not in (ema9, prev_ema9):
         slope_ok = ema9 > prev_ema9 if trend == "BUY" else ema9 < prev_ema9
 
     alignment = ema9 is not None and ema20 is not None and (ema9 > ema20 if trend == "BUY" else ema9 < ema20)
-    shift = age is not None and age <= TREND_CROSS_LOOKBACK_5M
+    shift = age is not None and age <= FAST_CROSS_LOOKBACK_5M
 
-    return {"ok": alignment, "shift": shift, "slope_ok": slope_ok, "ema9": ema9, "ema20": ema20, "age_bars": age}
+    return {
+        "ok": alignment,
+        "shift": shift,
+        "slope_ok": slope_ok,
+        "ema9": ema9,
+        "ema20": ema20,
+        "age_bars": age,
+        "spread": safe_float(spread.iloc[-1]),
+    }
 
 
 # =========================================================
@@ -339,10 +350,256 @@ def check_rsi(df1, trend):
 
 
 # =========================================================
-# ENTRY TIMING / LATE MOVE FILTER
+# IMPULSE / WAVE ANALYSIS
 # =========================================================
 
-def analyze_entry_timing(df1, df5, trend):
+def analyze_impulse_wave(df1, trend):
+    """Find the current impulse and determine whether price is chasing it."""
+    result = {
+        "wave_stage": "UNKNOWN",
+        "wave_low": None,
+        "wave_high": None,
+        "wave_range": None,
+        "wave_position": None,
+        "pullback_low": None,
+        "pullback_high": None,
+        "pullback_ratio": 0.0,
+        "pullback_atr": 0.0,
+        "fresh_pullback": False,
+        "reclaim": False,
+        "chasing": False,
+        "structure_ok": False,
+        "reasons": [],
+    }
+
+    if df1 is None or df1.empty or len(df1) < 20 or trend not in ("BUY", "SELL"):
+        result["reasons"].append("BLOCK: insufficient wave structure")
+        return result
+
+    work = df1.copy().tail(WAVE_LOOKBACK_1M).reset_index(drop=True)
+    atr = calculate_atr(work)
+    closes = pd.to_numeric(work["close"], errors="coerce")
+    highs = pd.to_numeric(work["high"], errors="coerce")
+    lows = pd.to_numeric(work["low"], errors="coerce")
+
+    if closes.isna().all() or highs.isna().all() or lows.isna().all():
+        result["reasons"].append("BLOCK: invalid wave data")
+        return result
+
+    current = safe_float(closes.iloc[-1])
+    if current is None:
+        result["reasons"].append("BLOCK: invalid current price")
+        return result
+
+    if trend == "BUY":
+        high_idx = int(highs.idxmax())
+        if high_idx <= 0:
+            result["reasons"].append("BLOCK: no bullish impulse found")
+            return result
+
+        # Lowest point before the impulse high.
+        low_slice = lows.iloc[:high_idx + 1]
+        low_idx = int(low_slice.idxmin())
+        wave_low = safe_float(lows.iloc[low_idx])
+        wave_high = safe_float(highs.iloc[high_idx])
+
+        if wave_low is None or wave_high is None or wave_high <= wave_low:
+            result["reasons"].append("BLOCK: invalid bullish impulse")
+            return result
+
+        wave_range = wave_high - wave_low
+        position = (current - wave_low) / wave_range
+
+        after_high = lows.iloc[high_idx + 1:]
+        pullback_low = safe_float(after_high.min()) if not after_high.empty else None
+        pullback_ratio = 0.0
+        pullback_atr = 0.0
+        pullback_idx = None
+
+        if pullback_low is not None:
+            pullback_ratio = max(0.0, (wave_high - pullback_low) / wave_range)
+            if not after_high.empty:
+                pullback_idx = int(after_high.idxmin())
+            if atr and atr > 0:
+                pullback_atr = (wave_high - pullback_low) / atr
+
+        # Pullback must be recent. A pullback from an old high is not a fresh entry.
+        recent_pullback = pullback_idx is not None and pullback_idx >= max(0, len(work) - PULLBACK_LOOKBACK_1M)
+
+        ema = calculate_ema(work["close"], 9)
+        previous = safe_float(closes.iloc[-2])
+        current_ema = safe_float(ema.iloc[-1])
+        previous_ema = safe_float(ema.iloc[-2])
+        reclaim = (
+            previous is not None and current_ema is not None and previous_ema is not None
+            and previous <= previous_ema and current >= current_ema
+        )
+
+        fresh_pullback = (
+            recent_pullback
+            and pullback_ratio >= MIN_PULLBACK_RATIO
+            and pullback_atr >= MIN_PULLBACK_ATR
+        )
+
+        # If price has already travelled deep into the impulse, a small 1M bounce is chasing.
+        chasing = (
+            position >= HARD_MAX_ENTRY_POSITION
+            or (position >= MAX_ENTRY_POSITION and not fresh_pullback)
+        )
+
+        result.update({
+            "wave_low": wave_low,
+            "wave_high": wave_high,
+            "wave_range": wave_range,
+            "wave_position": position,
+            "pullback_low": pullback_low,
+            "pullback_ratio": pullback_ratio,
+            "pullback_atr": pullback_atr,
+            "fresh_pullback": fresh_pullback,
+            "reclaim": reclaim,
+            "chasing": chasing,
+        })
+
+        if high_idx >= len(work) - 4:
+            wave_stage = "IMPULSE"
+        elif fresh_pullback and reclaim:
+            wave_stage = "RECLAIM"
+        elif fresh_pullback:
+            wave_stage = "PULLBACK"
+        elif position >= MAX_ENTRY_POSITION:
+            wave_stage = "EXTENDED"
+        else:
+            wave_stage = "CONTINUATION"
+
+        result["wave_stage"] = wave_stage
+
+        if chasing:
+            result["reasons"].append("BLOCK: chasing extended bullish impulse")
+        elif wave_stage == "EXTENDED":
+            result["reasons"].append("BLOCK: price too deep inside bullish impulse")
+        elif fresh_pullback and reclaim:
+            result["reasons"].append("OK: fresh pullback + reclaim")
+        elif fresh_pullback:
+            result["reasons"].append("WAIT: pullback formed, waiting reclaim")
+        else:
+            result["reasons"].append("INFO: bullish continuation")
+
+        result["structure_ok"] = (
+            not chasing
+            and position < HARD_MAX_ENTRY_POSITION
+            and (
+                position < MAX_ENTRY_POSITION
+                or (fresh_pullback and reclaim and position < 0.75)
+            )
+        )
+
+    else:
+        low_idx = int(lows.idxmin())
+        if low_idx <= 0:
+            result["reasons"].append("BLOCK: no bearish impulse found")
+            return result
+
+        high_slice = highs.iloc[:low_idx + 1]
+        high_idx = int(high_slice.idxmax())
+        wave_high = safe_float(highs.iloc[high_idx])
+        wave_low = safe_float(lows.iloc[low_idx])
+
+        if wave_low is None or wave_high is None or wave_high <= wave_low:
+            result["reasons"].append("BLOCK: invalid bearish impulse")
+            return result
+
+        wave_range = wave_high - wave_low
+        position = (wave_high - current) / wave_range
+
+        after_low = highs.iloc[low_idx + 1:]
+        pullback_high = safe_float(after_low.max()) if not after_low.empty else None
+        pullback_ratio = 0.0
+        pullback_atr = 0.0
+        pullback_idx = None
+
+        if pullback_high is not None:
+            pullback_ratio = max(0.0, (pullback_high - wave_low) / wave_range)
+            if not after_low.empty:
+                pullback_idx = int(after_low.idxmax())
+            if atr and atr > 0:
+                pullback_atr = (pullback_high - wave_low) / atr
+
+        recent_pullback = pullback_idx is not None and pullback_idx >= max(0, len(work) - PULLBACK_LOOKBACK_1M)
+
+        ema = calculate_ema(work["close"], 9)
+        previous = safe_float(closes.iloc[-2])
+        current_ema = safe_float(ema.iloc[-1])
+        previous_ema = safe_float(ema.iloc[-2])
+        reclaim = (
+            previous is not None and current_ema is not None and previous_ema is not None
+            and previous >= previous_ema and current <= current_ema
+        )
+
+        fresh_pullback = (
+            recent_pullback
+            and pullback_ratio >= MIN_PULLBACK_RATIO
+            and pullback_atr >= MIN_PULLBACK_ATR
+        )
+
+        chasing = (
+            position >= HARD_MAX_ENTRY_POSITION
+            or (position >= MAX_ENTRY_POSITION and not fresh_pullback)
+        )
+
+        result.update({
+            "wave_low": wave_low,
+            "wave_high": wave_high,
+            "wave_range": wave_range,
+            "wave_position": position,
+            "pullback_high": pullback_high,
+            "pullback_ratio": pullback_ratio,
+            "pullback_atr": pullback_atr,
+            "fresh_pullback": fresh_pullback,
+            "reclaim": reclaim,
+            "chasing": chasing,
+        })
+
+        if low_idx >= len(work) - 4:
+            wave_stage = "IMPULSE"
+        elif fresh_pullback and reclaim:
+            wave_stage = "RECLAIM"
+        elif fresh_pullback:
+            wave_stage = "PULLBACK"
+        elif position >= MAX_ENTRY_POSITION:
+            wave_stage = "EXTENDED"
+        else:
+            wave_stage = "CONTINUATION"
+
+        result["wave_stage"] = wave_stage
+
+        if chasing:
+            result["reasons"].append("BLOCK: chasing extended bearish impulse")
+        elif wave_stage == "EXTENDED":
+            result["reasons"].append("BLOCK: price too deep inside bearish impulse")
+        elif fresh_pullback and reclaim:
+            result["reasons"].append("OK: fresh pullback + reclaim")
+        elif fresh_pullback:
+            result["reasons"].append("WAIT: pullback formed, waiting reclaim")
+        else:
+            result["reasons"].append("INFO: bearish continuation")
+
+        result["structure_ok"] = (
+            not chasing
+            and position < HARD_MAX_ENTRY_POSITION
+            and (
+                position < MAX_ENTRY_POSITION
+                or (fresh_pullback and reclaim and position < 0.75)
+            )
+        )
+
+    return result
+
+
+# =========================================================
+# ENTRY TIMING / EXTENSION FILTER
+# =========================================================
+
+def analyze_entry_timing(df1, trend):
     result = {
         "timing_ok": False,
         "pullback": False,
@@ -367,12 +624,11 @@ def analyze_entry_timing(df1, df5, trend):
 
     atr = calculate_atr(work, RSI_PERIOD)
     result["atr"] = atr
-
-    lookback = work.iloc[-RECENT_LOOKBACK_1M:]
+    lookback = work.iloc[-30:]
     current = safe_float(work.iloc[-1]["close"])
     previous = safe_float(work.iloc[-2]["close"])
-    if current is None or previous is None:
-        result["reasons"].append("WAIT: entry price")
+    if current is None or previous is None or atr is None or atr <= 0:
+        result["reasons"].append("WAIT: entry volatility")
         return result
 
     recent_high = safe_float(lookback["high"].max())
@@ -380,74 +636,56 @@ def analyze_entry_timing(df1, df5, trend):
     result["recent_high"] = recent_high
     result["recent_low"] = recent_low
 
-    # 1M EMA9
     work["ema9"] = calculate_ema(work["close"], 9)
     ema9 = safe_float(work.iloc[-1]["ema9"])
     prev_ema9 = safe_float(work.iloc[-2]["ema9"])
-
-    if atr is None or atr <= 0 or ema9 is None:
-        result["reasons"].append("WAIT: entry volatility")
+    if ema9 is None or prev_ema9 is None:
+        result["reasons"].append("WAIT: entry EMA")
         return result
 
     if trend == "BUY":
         extension = current - ema9
         distance_extreme = recent_high - current
-        move_from_opposite = current - recent_low
         result["extension_atr"] = extension / atr
         result["extended"] = extension > MAX_EXTENSION_ATR * atr
         result["near_extreme"] = distance_extreme <= NEAR_EXTREME_ATR * atr
-
-        # Pullback + reclaim: previous close at/below EMA9, current back above it.
         result["pullback"] = previous <= safe_float(work.iloc[-2]["ema9"]) and current >= ema9
-        result["momentum_weak"] = (
-            prev_ema9 is not None
-            and ema9 < prev_ema9
-        )
-
+        result["momentum_weak"] = ema9 < prev_ema9
         if result["near_extreme"]:
             result["reasons"].append("BLOCK: near recent HIGH")
         elif result["extended"]:
             result["reasons"].append("BLOCK: price extended from 1M EMA9")
         elif result["pullback"]:
-            result["reasons"].append("OK: 1M pullback/reclaim")
+            result["reasons"].append("OK: 1M EMA9 reclaim")
         else:
-            result["reasons"].append("OK: entry not near extreme")
-
-        if result["momentum_weak"]:
-            result["reasons"].append("WARN: 1M EMA9 momentum weakening")
-
-        # Strong move without pullback is allowed only if it is not extended.
-        result["timing_ok"] = not result["near_extreme"] and not result["extended"] and not result["momentum_weak"]
-
+            result["reasons"].append("INFO: entry not near extreme")
     else:
         extension = ema9 - current
         distance_extreme = current - recent_low
-        move_from_opposite = recent_high - current
         result["extension_atr"] = extension / atr
         result["extended"] = extension > MAX_EXTENSION_ATR * atr
         result["near_extreme"] = distance_extreme <= NEAR_EXTREME_ATR * atr
         result["pullback"] = previous >= safe_float(work.iloc[-2]["ema9"]) and current <= ema9
-        result["momentum_weak"] = prev_ema9 is not None and ema9 > prev_ema9
-
+        result["momentum_weak"] = ema9 > prev_ema9
         if result["near_extreme"]:
             result["reasons"].append("BLOCK: near recent LOW")
         elif result["extended"]:
             result["reasons"].append("BLOCK: price extended from 1M EMA9")
         elif result["pullback"]:
-            result["reasons"].append("OK: 1M pullback/reclaim")
+            result["reasons"].append("OK: 1M EMA9 reclaim")
         else:
-            result["reasons"].append("OK: entry not near extreme")
+            result["reasons"].append("INFO: entry not near extreme")
 
-        if result["momentum_weak"]:
-            result["reasons"].append("WARN: 1M EMA9 momentum weakening")
+    # Do not hard-block solely on one weakening EMA tick; wave structure decides.
+    if result["momentum_weak"]:
+        result["reasons"].append("WATCH: 1M EMA9 momentum weakening")
 
-        result["timing_ok"] = not result["near_extreme"] and not result["extended"] and not result["momentum_weak"]
-
+    result["timing_ok"] = not result["near_extreme"] and not result["extended"]
     return result
 
 
 # =========================================================
-# RAPID REVERSAL / TREND WEAKENING
+# RAPID REVERSAL WARNING
 # =========================================================
 
 def detect_reversal_warning(df5, df1, trend):
@@ -464,17 +702,16 @@ def detect_reversal_warning(df5, df1, trend):
         ema20 = safe_float(last["ema_slow"])
         prev_ema9 = safe_float(prev["ema_fast"])
         prev_ema20 = safe_float(prev["ema_slow"])
-
         if trend == "BUY":
             if ema9 is not None and ema20 is not None and ema9 < ema20:
                 warnings.append("5M EMA9 crossed below EMA20")
-            if prev_ema9 is not None and ema9 is not None and ema9 < prev_ema9:
-                warnings.append("5M EMA9 slope DOWN")
+            if prev_ema9 is not None and ema9 is not None and ema9 < prev_ema9 and prev_ema20 is not None and ema20 < prev_ema20:
+                warnings.append("5M trend momentum DOWN")
         else:
             if ema9 is not None and ema20 is not None and ema9 > ema20:
                 warnings.append("5M EMA9 crossed above EMA20")
-            if prev_ema9 is not None and ema9 is not None and ema9 > prev_ema9:
-                warnings.append("5M EMA9 slope UP")
+            if prev_ema9 is not None and ema9 is not None and ema9 > prev_ema9 and prev_ema20 is not None and ema20 > prev_ema20:
+                warnings.append("5M trend momentum UP")
 
     if len(df1) >= 4:
         f1 = df1.copy()
@@ -485,7 +722,6 @@ def detect_reversal_warning(df5, df1, trend):
         ema9 = safe_float(last["ema9"])
         prev_price = safe_float(prev["close"])
         prev_ema9 = safe_float(prev["ema9"])
-
         if None not in (price, ema9, prev_price, prev_ema9):
             if trend == "BUY" and price < ema9 and prev_price < prev_ema9:
                 warnings.append("1M price below EMA9")
@@ -496,7 +732,7 @@ def detect_reversal_warning(df5, df1, trend):
 
 
 # =========================================================
-# MAIN SIGNAL V4
+# MAIN SIGNAL V5
 # =========================================================
 
 def generate_scalper_signal(df15, df5, df1):
@@ -507,13 +743,12 @@ def generate_scalper_signal(df15, df5, df1):
             "signal": "NO SIGNAL", "price": None, "score": 0,
             "confidence": 0, "quality": "WEAK", "trend": "NONE",
             "rsi": None, "atr": None, "pattern": "NONE",
-            "stage": "DATA", "trend_phase": "UNKNOWN",
+            "stage": "DATA", "trend_phase": "UNKNOWN", "wave_stage": "UNKNOWN",
             "reasons": ["Insufficient market data"],
         }
 
     last1 = df1.iloc[-1]
     price = safe_float(last1.get("close"))
-
     trend_state = get_trend_state(df15)
     trend = trend_state["trend"]
     phase = trend_state["phase"]
@@ -523,7 +758,7 @@ def generate_scalper_signal(df15, df5, df1):
             "signal": "NO SIGNAL", "price": price, "score": 0,
             "confidence": 0, "quality": "WEAK", "trend": "NONE",
             "rsi": None, "atr": calculate_atr(df1), "pattern": "NONE",
-            "stage": "WAIT", "trend_phase": phase,
+            "stage": "WAIT", "trend_phase": phase, "wave_stage": "UNKNOWN",
             "trend_age_bars": trend_state["age_bars"],
             "reasons": ["WAIT: 15M trend"],
         }
@@ -531,7 +766,10 @@ def generate_scalper_signal(df15, df5, df1):
     reasons.append(f"OK: 15M trend ({trend})")
     reasons.append(f"INFO: 15M trend phase ({phase})")
 
-    # Rapid reversal block before scoring.
+    momentum = get_5m_momentum_state(df5, trend)
+    if momentum["shift"]:
+        reasons.append("⚡ INFO: rapid 5M trend shift detected")
+
     reversal, reversal_warnings = detect_reversal_warning(df5, df1, trend)
     if reversal:
         reasons.extend(f"BLOCK: {w}" for w in reversal_warnings)
@@ -540,11 +778,11 @@ def generate_scalper_signal(df15, df5, df1):
             "confidence": 0, "quality": "WEAK", "trend": trend,
             "rsi": None, "atr": calculate_atr(df1), "pattern": "NONE",
             "stage": "REVERSAL_WARNING", "trend_phase": phase,
-            "trend_age_bars": trend_state["age_bars"],
+            "trend_age_bars": trend_state["age_bars"], "wave_stage": "REVERSAL_RISK",
             "reasons": reasons,
         }
 
-    # Score: base trend 25 + 5M EMA 20 + 5M momentum 15 + RSI 15 + candle 10 + pattern 15 = 100
+    # Score measures confirmation strength only. It can NEVER override structure/timing.
     score = 25
 
     ema_ok = check_5m_ema(df5, trend)
@@ -554,7 +792,6 @@ def generate_scalper_signal(df15, df5, df1):
     else:
         reasons.append("WAIT: 5M EMA9")
 
-    momentum = get_5m_momentum_state(df5, trend)
     if momentum["ok"] and momentum["slope_ok"]:
         score += 15
         reasons.append("OK: 5M momentum")
@@ -589,33 +826,61 @@ def generate_scalper_signal(df15, df5, df1):
     else:
         reasons.append("WAIT: candlestick pattern")
 
-    # Timing filter is NOT just a score item; it is a hard gate.
-    timing = analyze_entry_timing(df1, df5, trend)
+    timing = analyze_entry_timing(df1, trend)
     reasons.extend(timing["reasons"])
 
-    # Mature/Late trend requires a pullback. Early/Developing may enter continuation.
-    late_phase = phase in ("MATURE", "LATE")
-    if late_phase and not timing["pullback"]:
-        reasons.append("BLOCK: late trend without pullback")
-        timing["timing_ok"] = False
+    wave = analyze_impulse_wave(df1, trend)
+    reasons.extend(wave["reasons"])
 
-    # If trend is very old and price is extended, hard block.
-    if phase == "LATE" and timing["extended"]:
-        reasons.append("BLOCK: late + extended move")
-        timing["timing_ok"] = False
+    # =====================================================
+    # HARD STRUCTURAL ENTRY RULES
+    # =====================================================
 
-    # Near recent extreme is always a hard block for fresh entries.
+    hard_block = False
+
+    # Late trend: no chasing. A late move is allowed only after a fresh structural pullback + reclaim,
+    # and even then the price must not be too deep in the original impulse.
+    if phase == "LATE":
+        if not (wave["fresh_pullback"] and wave["reclaim"] and wave["wave_position"] is not None and wave["wave_position"] < 0.70):
+            reasons.append("BLOCK: LATE trend requires fresh structural pullback + reclaim")
+            hard_block = True
+
+    # Mature trend: pullback/reclaim required. No continuation chase.
+    if phase == "MATURE":
+        if not (wave["fresh_pullback"] and wave["reclaim"]):
+            reasons.append("BLOCK: MATURE trend requires fresh structural pullback + reclaim")
+            hard_block = True
+
+    # Deep impulse: score does not matter.
+    if wave["chasing"]:
+        reasons.append("BLOCK: entry is chasing the current impulse")
+        hard_block = True
+
+    # If position is beyond 78% of the identified impulse, only a new structural cycle may reset entry.
+    if wave["wave_position"] is not None and wave["wave_position"] >= HARD_MAX_ENTRY_POSITION:
+        reasons.append("BLOCK: price is in the final part of the impulse")
+        hard_block = True
+
     if timing["near_extreme"]:
         reasons.append("BLOCK: entry too close to recent extreme")
-        timing["timing_ok"] = False
+        hard_block = True
+
+    if timing["extended"]:
+        reasons.append("BLOCK: price extended from 1M EMA9")
+        hard_block = True
+
+    # A pullback/reclaim is only considered a valid new entry when it is structural, not a 1-candle dip.
+    if phase in ("MATURE", "LATE") and wave["fresh_pullback"] and not wave["reclaim"]:
+        reasons.append("BLOCK: pullback exists but reclaim is not confirmed")
+        hard_block = True
 
     confidence = min(int(score), 100)
     signal = "NO SIGNAL"
 
-    if score >= SIGNAL_SCORE and timing["timing_ok"]:
+    if score >= SIGNAL_SCORE and not hard_block and timing["timing_ok"] and wave["structure_ok"]:
         signal = trend
     elif score >= SIGNAL_SCORE:
-        reasons.append("BLOCK: timing filter")
+        reasons.append("BLOCK: structural entry filter")
 
     if score >= 90:
         quality = "VERY STRONG"
@@ -644,13 +909,24 @@ def generate_scalper_signal(df15, df5, df1):
         "atr": timing["atr"],
         "pattern": pattern,
         "pattern_direction": pattern_side,
-        "entry_timing_ok": timing["timing_ok"],
-        "pullback": timing["pullback"],
+        "entry_timing_ok": bool(timing["timing_ok"] and not hard_block),
+        "pullback": bool(wave["fresh_pullback"] and wave["reclaim"]),
         "near_extreme": timing["near_extreme"],
         "extended": timing["extended"],
         "extension_atr": timing["extension_atr"],
         "recent_high": timing["recent_high"],
         "recent_low": timing["recent_low"],
+        "wave_stage": wave["wave_stage"],
+        "wave_low": wave["wave_low"],
+        "wave_high": wave["wave_high"],
+        "wave_range": wave["wave_range"],
+        "wave_position": wave["wave_position"],
+        "pullback_ratio": wave["pullback_ratio"],
+        "pullback_atr": wave["pullback_atr"],
+        "fresh_pullback": wave["fresh_pullback"],
+        "reclaim": wave["reclaim"],
+        "chasing": wave["chasing"],
+        "structure_ok": wave["structure_ok"],
         "stage": stage,
         "reasons": reasons,
         "time": str(last1.get("time", "")),

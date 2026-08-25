@@ -40,6 +40,9 @@ from telegram_bot import send_goldpro_signal
 # فقط یک بار ارسال می‌شود.
 #
 LAST_SENT_SIGNAL = None
+LAST_SENT_SIGNAL_TIME = None
+LAST_SENT_SIGNAL_WAVE = None
+SIGNAL_COOLDOWN_SECONDS = 900
 
 
 # =========================================================
@@ -53,7 +56,7 @@ if STRATEGY_MODE == "SCALPER":
     )
 
     print(
-        "🧠 Strategy Loaded: GoldPro+ Scalper V4"
+        "🧠 Strategy Loaded: GoldPro+ Scalper V5"
     )
 
 else:
@@ -217,69 +220,36 @@ def is_duplicate_signal(
     result
 ):
 
-    global LAST_SENT_SIGNAL
+    global LAST_SENT_SIGNAL, LAST_SENT_SIGNAL_TIME, LAST_SENT_SIGNAL_WAVE
 
+    signal = result.get("signal", "NO SIGNAL")
+    price = result.get("price")
 
-    signal = result.get(
-        "signal",
-        "NO SIGNAL"
-    )
-
-
-    price = result.get(
-        "price"
-    )
-
-
-    if signal not in (
-        "BUY",
-        "SELL"
-    ):
-
+    if signal not in ("BUY", "SELL") or price is None:
         return False
-
-
-    if price is None:
-
-        return False
-
 
     try:
-
-        price = float(
-            price
-        )
-
+        price = float(price)
     except Exception:
-
         return False
 
-
-    # ---------------------------------------------------------
-    # ساخت شناسه سیگنال
-    #
-    # Entry را تا 2 رقم اعشار گرد می‌کنیم
-    # تا تغییرات بسیار کوچک قیمت باعث ارسال دوباره نشود.
-    # ---------------------------------------------------------
-
-    fingerprint = (
-        symbol,
-        signal,
-        round(
-            price,
-            2
-        )
-    )
-
-
-    # ---------------------------------------------------------
-    # بررسی تکراری بودن
-    # ---------------------------------------------------------
-
+    # Exact/near-exact duplicate.
+    fingerprint = (symbol, signal, round(price, 2))
     if fingerprint == LAST_SENT_SIGNAL:
-
         return True
 
+    # Same-direction cooldown: do not fire multiple entries inside one short impulse.
+    if LAST_SENT_SIGNAL_TIME is not None:
+        elapsed = time.time() - LAST_SENT_SIGNAL_TIME
+        if elapsed < SIGNAL_COOLDOWN_SECONDS:
+            last_wave = LAST_SENT_SIGNAL_WAVE or {}
+            current_wave = {
+                "low": result.get("wave_low"),
+                "high": result.get("wave_high"),
+            }
+            last_dir = LAST_SENT_SIGNAL[1] if LAST_SENT_SIGNAL else None
+            if last_dir == signal:
+                return True
 
     return False
 
@@ -293,52 +263,25 @@ def mark_signal_as_sent(
     result
 ):
 
-    global LAST_SENT_SIGNAL
+    global LAST_SENT_SIGNAL, LAST_SENT_SIGNAL_TIME, LAST_SENT_SIGNAL_WAVE
 
+    signal = result.get("signal", "NO SIGNAL")
+    price = result.get("price")
 
-    signal = result.get(
-        "signal",
-        "NO SIGNAL"
-    )
-
-
-    price = result.get(
-        "price"
-    )
-
-
-    if signal not in (
-        "BUY",
-        "SELL"
-    ):
-
+    if signal not in ("BUY", "SELL") or price is None:
         return
-
-
-    if price is None:
-
-        return
-
 
     try:
-
-        price = float(
-            price
-        )
-
+        price = float(price)
     except Exception:
-
         return
 
-
-    LAST_SENT_SIGNAL = (
-        symbol,
-        signal,
-        round(
-            price,
-            2
-        )
-    )
+    LAST_SENT_SIGNAL = (symbol, signal, round(price, 2))
+    LAST_SENT_SIGNAL_TIME = time.time()
+    LAST_SENT_SIGNAL_WAVE = {
+        "low": result.get("wave_low"),
+        "high": result.get("wave_high"),
+    }
 
 
 # =========================================================
@@ -574,6 +517,25 @@ def check_market(symbol):
         )
 
 
+        trend_phase = result.get("trend_phase", "UNKNOWN")
+        wave_stage = result.get("wave_stage", "UNKNOWN")
+        wave_position = result.get("wave_position")
+
+        print(
+            f"🧭 Trend Phase: {trend_phase}"
+        )
+
+        print(
+            f"🌊 Wave Stage: {wave_stage}"
+        )
+
+        if wave_position is not None:
+
+            print(
+                f"📍 Wave Position: {wave_position * 100:.1f}%"
+            )
+
+
         print(
             f"💰 Price: {price}"
         )
@@ -787,7 +749,7 @@ def main():
 
         print(
             "📈 Strategy: "
-            "15M Trend → 5M Confirmation → 1M Entry"
+            "15M Trend → 5M Structure → 1M Wave Entry"
         )
 
 
@@ -797,17 +759,17 @@ def main():
 
 
         print(
-            "   15M → every 30 minutes"
+            "   15M → cache/API according to data feed TTL"
         )
 
 
         print(
-            "   5M  → every 10 minutes"
+            "   5M  → cache/API according to data feed TTL"
         )
 
 
         print(
-            "   1M  → every 3 minutes"
+            "   1M  → cache/API according to data feed TTL"
         )
 
 
