@@ -1,4 +1,5 @@
 import time
+from telegram_bot import send_goldpro_signal
 
 from config import (
     MARKETS,
@@ -354,7 +355,16 @@ def check_market(symbol):
                 df5,
                 df1
             )
+# =================================================
+# TELEGRAM AUTO SIGNAL
+# =================================================
 
+if result.get("signal") in ("BUY", "SELL"):
+
+    send_goldpro_signal(
+        symbol,
+        result
+    )
 
         # =================================================
         # RESULT
