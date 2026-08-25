@@ -1,185 +1,422 @@
-import pandas as pd
-
-from indicators import add_indicators
-
-
 # =========================================================
-# GoldPro+ Scalper V1
+# GoldPro+ Scalper V2
 #
 # 15M Trend
-# 5M Confirmation
-# 1M Entry
+# 5M EMA9 Confirmation
+# 1M RSI + Candle Entry
+#
+# هدف:
+# افزایش تعداد فرصت‌های اسکالپینگ
+# بدون حذف فیلتر روند
 # =========================================================
 
-
-MIN_SCORE = 70
-
-
-# =========================================================
-# HELPERS
-# =========================================================
-
-def safe_float(value, default=0.0):
-    try:
-        return float(value)
-    except:
-        return default
-
-
-def prepare(df):
-
-    if df is None or df.empty:
-        return None
-
-    try:
-        return add_indicators(df.copy())
-    except Exception as e:
-        print("Indicator error:", e)
-        return None
-
-
-def last(df):
-    return df.iloc[-1]
+import pandas as pd
 
 
 # =========================================================
-# 15M TREND
+# SETTINGS
 # =========================================================
 
-def trend_15m(df):
+EMA_PERIOD = 9
+RSI_PERIOD = 14
 
-    candle = last(df)
+SIGNAL_SCORE = 70
+WATCH_SCORE = 60
 
-    ema20 = safe_float(
-        candle.get("EMA20")
+RSI_BUY_ZONE = 50
+RSI_SELL_ZONE = 50
+
+CANDLE_BODY_MIN = 0.45
+
+
+# =========================================================
+# EMA
+# =========================================================
+
+def calculate_ema(series, period=EMA_PERIOD):
+
+    return series.ewm(
+        span=period,
+        adjust=False
+    ).mean()
+
+
+# =========================================================
+# RSI
+# =========================================================
+
+def calculate_rsi(
+    series,
+    period=RSI_PERIOD
+):
+
+    delta = series.diff()
+
+    gain = delta.clip(
+        lower=0
     )
 
-    ema50 = safe_float(
-        candle.get("EMA50")
+    loss = -delta.clip(
+        upper=0
     )
 
-    if ema20 > ema50:
-        return "BUY"
+    avg_gain = gain.ewm(
+        alpha=1 / period,
+        adjust=False
+    ).mean()
 
-    if ema20 < ema50:
-        return "SELL"
+    avg_loss = loss.ewm(
+        alpha=1 / period,
+        adjust=False
+    ).mean()
 
-    return "NONE"
+    rs = avg_gain / avg_loss.replace(
+        0,
+        pd.NA
+    )
+
+    rsi = 100 - (
+        100 / (1 + rs)
+    )
+
+    return rsi
 
 
 # =========================================================
-# 5M EMA9 CONFIRMATION
+# CANDLE STRENGTH
 # =========================================================
 
-def ema9_confirmation(df5, direction):
+def candle_strength(candle):
 
-    candle = last(df5)
-
-    price = safe_float(
-        candle.get("close")
+    open_price = float(
+        candle["open"]
     )
 
-    ema9 = safe_float(
-        candle.get("EMA9")
+    high = float(
+        candle["high"]
     )
 
-    if direction == "BUY":
-        return price > ema9
-
-    if direction == "SELL":
-        return price < ema9
-
-    return False
-
-
-# =========================================================
-# RSI REVERSAL
-# =========================================================
-
-def rsi_entry(df1, direction):
-
-    if len(df1) < 3:
-        return False
-
-    rsi_now = safe_float(
-        df1.iloc[-1].get("RSI")
+    low = float(
+        candle["low"]
     )
 
-    rsi_prev = safe_float(
-        df1.iloc[-2].get("RSI")
+    close = float(
+        candle["close"]
     )
 
+    candle_range = high - low
 
-    if direction == "BUY":
+    if candle_range <= 0:
 
-        return (
-            rsi_prev < 35
-            and rsi_now > rsi_prev
-        )
-
-
-    if direction == "SELL":
-
-        return (
-            rsi_prev > 65
-            and rsi_now < rsi_prev
-        )
-
-
-    return False
-
-
-# =========================================================
-# STRONG CANDLE
-# =========================================================
-
-def strong_candle(df1, direction):
-
-    candle = last(df1)
-
-    open_price = safe_float(
-        candle.get("open")
-    )
-
-    close = safe_float(
-        candle.get("close")
-    )
-
-    high = safe_float(
-        candle.get("high")
-    )
-
-    low = safe_float(
-        candle.get("low")
-    )
-
-
-    total = high - low
-
-    if total <= 0:
-        return False
+        return {
+            "bullish": False,
+            "bearish": False,
+            "strong": False,
+            "body_ratio": 0,
+        }
 
 
     body = abs(
         close - open_price
     )
 
-    ratio = body / total
+    body_ratio = (
+        body / candle_range
+    )
 
 
-    if ratio < 0.55:
+    bullish = (
+        close > open_price
+    )
+
+    bearish = (
+        close < open_price
+    )
+
+    strong = (
+        body_ratio >= CANDLE_BODY_MIN
+    )
+
+
+    return {
+
+        "bullish":
+            bullish,
+
+        "bearish":
+            bearish,
+
+        "strong":
+            strong,
+
+        "body_ratio":
+            body_ratio,
+    }
+
+
+# =========================================================
+# TREND DETECTION
+# =========================================================
+
+def get_trend(df15):
+
+    if df15 is None:
+        return "NONE"
+
+    if len(df15) < 20:
+        return "NONE"
+
+
+    df = df15.copy()
+
+
+    df["ema9"] = calculate_ema(
+        df["close"],
+        9
+    )
+
+
+    df["ema20"] = calculate_ema(
+        df["close"],
+        20
+    )
+
+
+    last = df.iloc[-1]
+
+
+    price = float(
+        last["close"]
+    )
+
+    ema9 = float(
+        last["ema9"]
+    )
+
+    ema20 = float(
+        last["ema20"]
+    )
+
+
+    # -----------------------------------------------------
+    # BULLISH
+    # -----------------------------------------------------
+
+    if (
+        price > ema9
+        and ema9 > ema20
+    ):
+
+        return "BUY"
+
+
+    # -----------------------------------------------------
+    # BEARISH
+    # -----------------------------------------------------
+
+    if (
+        price < ema9
+        and ema9 < ema20
+    ):
+
+        return "SELL"
+
+
+    return "NONE"
+
+
+# =========================================================
+# 5M EMA CONFIRMATION
+# =========================================================
+
+def check_5m_ema(
+    df5,
+    trend
+):
+
+    if df5 is None:
+        return False
+
+    if len(df5) < EMA_PERIOD:
         return False
 
 
-    if direction == "BUY":
-        return close > open_price
+    df = df5.copy()
 
 
-    if direction == "SELL":
-        return close < open_price
+    df["ema9"] = calculate_ema(
+        df["close"],
+        EMA_PERIOD
+    )
+
+
+    last = df.iloc[-1]
+
+    price = float(
+        last["close"]
+    )
+
+    ema9 = float(
+        last["ema9"]
+    )
+
+
+    # =====================================================
+    # BUY
+    # =====================================================
+
+    if trend == "BUY":
+
+        # قیمت بالای EMA9
+        if price >= ema9:
+            return True
+
+        # یا فاصله بسیار کم باشد
+        distance = abs(
+            price - ema9
+        )
+
+        atr = 0
+
+        if "atr" in df.columns:
+
+            try:
+                atr = float(
+                    last["atr"]
+                )
+            except:
+                atr = 0
+
+        if atr > 0:
+
+            return (
+                distance <= atr * 0.20
+            )
+
+        return False
+
+
+    # =====================================================
+    # SELL
+    # =====================================================
+
+    if trend == "SELL":
+
+        if price <= ema9:
+            return True
+
+        distance = abs(
+            price - ema9
+        )
+
+        atr = 0
+
+        if "atr" in df.columns:
+
+            try:
+                atr = float(
+                    last["atr"]
+                )
+            except:
+                atr = 0
+
+        if atr > 0:
+
+            return (
+                distance <= atr * 0.20
+            )
+
+        return False
 
 
     return False
+
+
+# =========================================================
+# RSI CHECK
+# =========================================================
+
+def check_rsi(
+    df1,
+    trend
+):
+
+    if df1 is None:
+        return False, None
+
+
+    if len(df1) < RSI_PERIOD + 2:
+        return False, None
+
+
+    df = df1.copy()
+
+
+    df["rsi"] = calculate_rsi(
+        df["close"],
+        RSI_PERIOD
+    )
+
+
+    current = df.iloc[-1]
+
+    previous = df.iloc[-2]
+
+
+    rsi = float(
+        current["rsi"]
+    )
+
+    previous_rsi = float(
+        previous["rsi"]
+    )
+
+
+    # =====================================================
+    # BUY
+    # =====================================================
+
+    if trend == "BUY":
+
+        # RSI برگشت صعودی
+        reversal = (
+            previous_rsi <= 50
+            and rsi > previous_rsi
+        )
+
+        # RSI در محدوده bullish
+        bullish_zone = (
+            50 <= rsi <= 68
+        )
+
+        return (
+            reversal or bullish_zone,
+            rsi
+        )
+
+
+    # =====================================================
+    # SELL
+    # =====================================================
+
+    if trend == "SELL":
+
+        reversal = (
+            previous_rsi >= 50
+            and rsi < previous_rsi
+        )
+
+        bearish_zone = (
+            32 <= rsi <= 50
+        )
+
+        return (
+            reversal or bearish_zone,
+            rsi
+        )
+
+
+    return False, rsi
 
 
 # =========================================================
@@ -192,10 +429,12 @@ def generate_scalper_signal(
     df1
 ):
 
-    df15 = prepare(df15)
-    df5 = prepare(df5)
-    df1 = prepare(df1)
+    reasons = []
 
+
+    # =====================================================
+    # BASIC CHECK
+    # =====================================================
 
     if (
         df15 is None
@@ -204,52 +443,156 @@ def generate_scalper_signal(
     ):
 
         return {
-            "signal": "NO SIGNAL",
-            "score": 0,
-            "confidence": 0,
-            "quality": "WEAK",
-            "reasons": [
-                "No data"
-            ]
+
+            "signal":
+                "NO SIGNAL",
+
+            "score":
+                0,
+
+            "confidence":
+                0,
+
+            "quality":
+                "WEAK",
+
+            "trend":
+                "NONE",
+
+            "price":
+                None,
+
+            "rsi":
+                None,
+
+            "atr":
+                None,
+
+            "reasons":
+                ["Insufficient market data"],
         }
 
 
-    direction = trend_15m(df15)
+    if (
+        df15.empty
+        or df5.empty
+        or df1.empty
+    ):
 
-    candle = last(df1)
+        return {
 
-    price = safe_float(
-        candle.get("close")
+            "signal":
+                "NO SIGNAL",
+
+            "score":
+                0,
+
+            "confidence":
+                0,
+
+            "quality":
+                "WEAK",
+
+            "trend":
+                "NONE",
+
+            "price":
+                None,
+
+            "rsi":
+                None,
+
+            "atr":
+                None,
+
+            "reasons":
+                ["Empty market data"],
+        }
+
+
+    # =====================================================
+    # TREND
+    # =====================================================
+
+    trend = get_trend(
+        df15
     )
 
 
-    score = 0
-
-    reasons = []
-
-
-    # Trend 15M
-    if direction != "NONE":
-
-        score += 35
-
-        reasons.append(
-            "OK: 15M trend"
-        )
-
-    else:
+    if trend == "NONE":
 
         reasons.append(
             "WAIT: 15M trend"
         )
 
+    else:
 
+        reasons.append(
+            f"OK: 15M trend ({trend})"
+        )
+
+
+    # =====================================================
+    # PRICE
+    # =====================================================
+
+    last1 = df1.iloc[-1]
+
+
+    price = float(
+        last1["close"]
+    )
+
+
+    # =====================================================
+    # ATR
+    # =====================================================
+
+    atr = None
+
+    if "atr" in df1.columns:
+
+        try:
+
+            atr = float(
+                last1["atr"]
+            )
+
+        except:
+
+            atr = None
+
+
+    # =====================================================
+    # SCORE
+    # =====================================================
+
+    score = 0
+
+
+    # =====================================================
+    # 15M TREND
+    # =====================================================
+
+    if trend in [
+        "BUY",
+        "SELL"
+    ]:
+
+        score += 30
+
+
+    # =====================================================
     # 5M EMA9
+    # =====================================================
 
-    if ema9_confirmation(
+    ema_ok = check_5m_ema(
         df5,
-        direction
-    ):
+        trend
+    )
+
+
+    if ema_ok:
 
         score += 25
 
@@ -264,17 +607,22 @@ def generate_scalper_signal(
         )
 
 
-    # RSI
+    # =====================================================
+    # 1M RSI
+    # =====================================================
 
-    if rsi_entry(
+    rsi_ok, rsi = check_rsi(
         df1,
-        direction
-    ):
+        trend
+    )
+
+
+    if rsi_ok:
 
         score += 25
 
         reasons.append(
-            "OK: 1M RSI reversal"
+            "OK: 1M RSI"
         )
 
     else:
@@ -284,14 +632,37 @@ def generate_scalper_signal(
         )
 
 
-    # Candle
+    # =====================================================
+    # 1M CANDLE
+    # =====================================================
 
-    if strong_candle(
-        df1,
-        direction
-    ):
+    candle = candle_strength(
+        last1
+    )
 
-        score += 15
+
+    candle_ok = False
+
+
+    if trend == "BUY":
+
+        candle_ok = (
+            candle["bullish"]
+            and candle["strong"]
+        )
+
+
+    elif trend == "SELL":
+
+        candle_ok = (
+            candle["bearish"]
+            and candle["strong"]
+        )
+
+
+    if candle_ok:
+
+        score += 20
 
         reasons.append(
             "OK: strong 1M candle"
@@ -304,50 +675,109 @@ def generate_scalper_signal(
         )
 
 
+    # =====================================================
+    # CONFIDENCE
+    # =====================================================
+
+    confidence = score
+
+
+    # =====================================================
+    # SIGNAL
+    # =====================================================
+
     signal = "NO SIGNAL"
 
 
     if (
-        score >= MIN_SCORE
-        and direction in [
-            "BUY",
-            "SELL"
-        ]
+        trend == "BUY"
+        and score >= SIGNAL_SCORE
     ):
 
-        signal = direction
+        signal = "BUY"
 
+
+    elif (
+        trend == "SELL"
+        and score >= SIGNAL_SCORE
+    ):
+
+        signal = "SELL"
+
+
+    # =====================================================
+    # QUALITY
+    # =====================================================
+
+    if score >= 85:
+
+        quality = "VERY STRONG"
+
+    elif score >= 75:
+
+        quality = "STRONG"
+
+    elif score >= 60:
+
+        quality = "NORMAL"
+
+    else:
+
+        quality = "WEAK"
+
+
+    # =====================================================
+    # WATCH
+    # =====================================================
+
+    if (
+        signal == "NO SIGNAL"
+        and score >= WATCH_SCORE
+    ):
+
+        reasons.append(
+            "WATCH: setup developing"
+        )
+
+
+    # =====================================================
+    # RESULT
+    # =====================================================
 
     return {
 
-        "signal": signal,
+        "signal":
+            signal,
 
-        "price": price,
+        "price":
+            price,
 
-        "score": score,
+        "score":
+            score,
 
-        "confidence": score,
+        "confidence":
+            confidence,
 
         "quality":
-            "STRONG"
-            if score >= 85
-            else "NORMAL"
-            if score >= 70
-            else "WEAK",
+            quality,
 
-        "trend": direction,
+        "trend":
+            trend,
 
-        "rsi": safe_float(
-            candle.get("RSI")
-        ),
+        "rsi":
+            rsi,
 
-        "atr": safe_float(
-            candle.get("ATR")
-        ),
+        "atr":
+            atr,
 
-        "reasons": reasons,
+        "reasons":
+            reasons,
 
-        "time": str(
-            candle.get("time")
-        )
+        "time":
+            str(
+                last1.get(
+                    "time",
+                    ""
+                )
+            ),
     }
