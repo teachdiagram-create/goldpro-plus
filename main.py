@@ -56,7 +56,7 @@ if STRATEGY_MODE == "SCALPER":
     )
 
     print(
-        "🧠 Strategy Loaded: GoldPro+ Scalper V5"
+        "🧠 Strategy Loaded: GoldPro+ Scalper V6"
     )
 
 else:
@@ -535,6 +535,18 @@ def check_market(symbol):
                 f"📍 Wave Position: {wave_position * 100:.1f}%"
             )
 
+        reversal_confirmations = result.get("reversal_confirmations", 0)
+        if reversal_confirmations:
+            print(f"🔄 5M Reversal Evidence: {reversal_confirmations}")
+
+        fib_ratio = result.get("fib_ratio")
+        if fib_ratio is not None:
+            print(f"📐 5M Fib Pullback: {fib_ratio * 100:.1f}%")
+
+        sr_type = result.get("sr_level_type", "NONE")
+        sr_level = result.get("sr_level")
+        if sr_level is not None and sr_type != "NONE":
+            print(f"🧱 5M {sr_type}: {sr_level}")
 
         print(
             f"💰 Price: {price}"

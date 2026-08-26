@@ -193,6 +193,23 @@ def format_signal_message(symbol, result):
             f"\n🌊 Wave: {wave_low} → {wave_high}"
         )
 
+    reversal_confirmations = result.get("reversal_confirmations", 0)
+    reversal_type = result.get("reversal_type", "NONE")
+    if reversal_confirmations:
+        message += (
+            f"\n🔄 5M Reversal Evidence: {reversal_confirmations}"
+            f"\n🧭 Reversal Type: {reversal_type}"
+        )
+
+    fib_ratio = result.get("fib_ratio")
+    if fib_ratio is not None:
+        message += f"\n📐 5M Fib Pullback: {float(fib_ratio) * 100:.1f}%"
+
+    sr_type = result.get("sr_level_type", "NONE")
+    sr_level = result.get("sr_level")
+    if sr_level is not None and sr_type != "NONE":
+        message += f"\n🧱 5M {sr_type}: {sr_level}"
+
     if reasons:
 
         message += "\n\n📋 Conditions:"

@@ -1,5 +1,5 @@
 # =========================================================
-# GoldPro+ Scalper V5
+# GoldPro+ Scalper V6
 #
 # 15M Trend -> 5M Momentum/Structure -> 1M Entry
 #
@@ -28,7 +28,7 @@ SIGNAL_SCORE = 75
 WATCH_SCORE = 60
 CANDLE_BODY_MIN = 0.45
 
-# 1M wave/structure settings
+# V5 legacy wave settings (kept for compatibility)
 WAVE_LOOKBACK_1M = 60
 PULLBACK_LOOKBACK_1M = 15
 MIN_PULLBACK_RATIO = 0.30
@@ -42,6 +42,18 @@ NEAR_EXTREME_ATR = 0.65
 
 # Fast 5M trend-change detection
 FAST_CROSS_LOOKBACK_5M = 3
+
+# V6: short-wave reversal / structure engine
+SWING_LOOKBACK_5M = 24
+DIVERGENCE_LOOKBACK_5M = 18
+REVERSAL_CONFIRMATIONS = 2
+PULLBACK_MIN_RATIO = 0.20
+PULLBACK_MAX_RATIO = 0.72
+FIB_ZONE_LOW = 0.382
+FIB_ZONE_HIGH = 0.618
+SR_ATR_DISTANCE = 0.75
+STRUCTURE_BREAK_LOOKBACK = 6
+
 
 
 # =========================================================
@@ -732,7 +744,340 @@ def detect_reversal_warning(df5, df1, trend):
 
 
 # =========================================================
-# MAIN SIGNAL V5
+# V6: 5M REVERSAL / DIVERGENCE / SUPPORT-RESISTANCE / FIBONACCI
+# =========================================================
+
+def _recent_swing_levels(df, lookback=SWING_LOOKBACK_5M):
+    if df is None or df.empty:
+        return None, None
+    work = df.tail(lookback).copy()
+    highs = pd.to_numeric(work["high"], errors="coerce").dropna()
+    lows = pd.to_numeric(work["low"], errors="coerce").dropna()
+    if highs.empty or lows.empty:
+        return None, None
+    return safe_float(highs.max()), safe_float(lows.min())
+
+
+def _rsi_series(df, period=RSI_PERIOD):
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    return calculate_rsi(pd.to_numeric(df["close"], errors="coerce"), period)
+
+
+def detect_5m_divergence(df5, trend):
+    """Detect counter-trend RSI divergence on the short 5M wave.
+
+    BUY trend + bearish divergence = price makes a higher high while RSI makes a lower high.
+    SELL trend + bullish divergence = price makes a lower low while RSI makes a higher low.
+    """
+    result = {
+        "detected": False,
+        "type": "NONE",
+        "strength": 0,
+        "reasons": [],
+    }
+    if df5 is None or df5.empty or len(df5) < DIVERGENCE_LOOKBACK_5M or trend not in ("BUY", "SELL"):
+        return result
+
+    work = df5.tail(DIVERGENCE_LOOKBACK_5M).copy().reset_index(drop=True)
+    close = pd.to_numeric(work["close"], errors="coerce")
+    rsi = _rsi_series(work)
+    if close.isna().all() or rsi.isna().all():
+        return result
+
+    # Split the short wave into two halves. This avoids overfitting to one candle.
+    mid = len(work) // 2
+    first = slice(0, mid)
+    second = slice(mid, len(work))
+
+    if trend == "BUY":
+        p1 = safe_float(close.iloc[first].max())
+        p2 = safe_float(close.iloc[second].max())
+        r1 = safe_float(rsi.iloc[first].max())
+        r2 = safe_float(rsi.iloc[second].max())
+        if None not in (p1, p2, r1, r2) and p2 > p1 and r2 < r1 - 2.0:
+            result.update({"detected": True, "type": "BEARISH_RSI_DIVERGENCE", "strength": 2})
+            result["reasons"].append("5M bearish RSI divergence")
+    else:
+        p1 = safe_float(close.iloc[first].min())
+        p2 = safe_float(close.iloc[second].min())
+        r1 = safe_float(rsi.iloc[first].min())
+        r2 = safe_float(rsi.iloc[second].min())
+        if None not in (p1, p2, r1, r2) and p2 < p1 and r2 > r1 + 2.0:
+            result.update({"detected": True, "type": "BULLISH_RSI_DIVERGENCE", "strength": 2})
+            result["reasons"].append("5M bullish RSI divergence")
+
+    return result
+
+
+def detect_5m_reversal_pattern(df5, trend):
+    """Look for a reversal candle/pattern against the active trend."""
+    result = {"detected": False, "pattern": "NONE", "strength": 0, "reasons": []}
+    if df5 is None or len(df5) < 3 or trend not in ("BUY", "SELL"):
+        return result
+
+    previous = df5.iloc[-2]
+    current = df5.iloc[-1]
+
+    # Reuse the robust candle definitions already used by V5.
+    if trend == "BUY":
+        if bearish_engulfing(previous, current):
+            pattern = "BEARISH_ENGULFING"
+        elif shooting_star(current):
+            pattern = "SHOOTING_STAR"
+        elif bearish_marubozu(current):
+            pattern = "BEARISH_MARUBOZU"
+        else:
+            pattern = "NONE"
+    else:
+        if bullish_engulfing(previous, current):
+            pattern = "BULLISH_ENGULFING"
+        elif hammer(current):
+            pattern = "HAMMER"
+        elif bullish_marubozu(current):
+            pattern = "BULLISH_MARUBOZU"
+        else:
+            pattern = "NONE"
+
+    if pattern != "NONE":
+        result.update({"detected": True, "pattern": pattern, "strength": 1})
+        result["reasons"].append(f"5M reversal candle: {pattern}")
+    return result
+
+
+def detect_5m_structure_shift(df5, trend):
+    """Detect an early 5M market-structure shift before 15M changes."""
+    result = {
+        "shift": False,
+        "break_level": None,
+        "reclaim": False,
+        "ema_cross": False,
+        "momentum": False,
+        "reasons": [],
+    }
+    if df5 is None or df5.empty or len(df5) < 25 or trend not in ("BUY", "SELL"):
+        return result
+
+    work = _ema_state(df5.copy(), 9, 20).reset_index(drop=True)
+    close = pd.to_numeric(work["close"], errors="coerce")
+    ema9 = pd.to_numeric(work["ema_fast"], errors="coerce")
+    ema20 = pd.to_numeric(work["ema_slow"], errors="coerce")
+    if len(work) < STRUCTURE_BREAK_LOOKBACK + 3:
+        return result
+
+    last = safe_float(close.iloc[-1])
+    prev = safe_float(close.iloc[-2])
+    last_ema9 = safe_float(ema9.iloc[-1])
+    prev_ema9 = safe_float(ema9.iloc[-2])
+    last_ema20 = safe_float(ema20.iloc[-1])
+    prev_ema20 = safe_float(ema20.iloc[-2])
+    if None in (last, prev, last_ema9, prev_ema9, last_ema20, prev_ema20):
+        return result
+
+    prior_high = safe_float(pd.to_numeric(work["high"], errors="coerce").iloc[-(STRUCTURE_BREAK_LOOKBACK+1):-1].max())
+    prior_low = safe_float(pd.to_numeric(work["low"], errors="coerce").iloc[-(STRUCTURE_BREAK_LOOKBACK+1):-1].min())
+
+    if trend == "BUY":
+        # A bearish structure warning is a break below the recent short-wave floor.
+        if prior_low is not None and last < prior_low:
+            result["shift"] = True
+            result["break_level"] = prior_low
+            result["reasons"].append("5M bearish structure break")
+        if prev_ema9 >= prev_ema20 and last_ema9 < last_ema20:
+            result["ema_cross"] = True
+            result["reasons"].append("5M EMA9/20 bearish cross")
+        if last_ema9 < prev_ema9 and last_ema20 < prev_ema20:
+            result["momentum"] = True
+            result["reasons"].append("5M downside momentum")
+    else:
+        if prior_high is not None and last > prior_high:
+            result["shift"] = True
+            result["break_level"] = prior_high
+            result["reasons"].append("5M bullish structure break")
+        if prev_ema9 <= prev_ema20 and last_ema9 > last_ema20:
+            result["ema_cross"] = True
+            result["reasons"].append("5M EMA9/20 bullish cross")
+        if last_ema9 > prev_ema9 and last_ema20 > prev_ema20:
+            result["momentum"] = True
+            result["reasons"].append("5M upside momentum")
+
+    return result
+
+
+def analyze_fibonacci_zone(df5, trend):
+    """Use the latest 5M swing to identify a healthy retracement zone."""
+    result = {
+        "valid": False,
+        "in_zone": False,
+        "ratio": None,
+        "swing_high": None,
+        "swing_low": None,
+        "reasons": [],
+    }
+    if df5 is None or df5.empty or len(df5) < 12 or trend not in ("BUY", "SELL"):
+        return result
+
+    work = df5.tail(SWING_LOOKBACK_5M).copy().reset_index(drop=True)
+    highs = pd.to_numeric(work["high"], errors="coerce")
+    lows = pd.to_numeric(work["low"], errors="coerce")
+    current = safe_float(work.iloc[-1]["close"])
+    if current is None or highs.isna().all() or lows.isna().all():
+        return result
+
+    high_idx = int(highs.idxmax())
+    low_idx = int(lows.idxmin())
+    swing_high = safe_float(highs.max())
+    swing_low = safe_float(lows.min())
+    if None in (swing_high, swing_low) or swing_high <= swing_low:
+        return result
+
+    rng = swing_high - swing_low
+    if trend == "BUY":
+        # Pullback from high toward low: 38.2-61.8% retracement is the preferred zone.
+        ratio = (swing_high - current) / rng
+    else:
+        ratio = (current - swing_low) / rng
+
+    result.update({
+        "valid": True,
+        "ratio": ratio,
+        "swing_high": swing_high,
+        "swing_low": swing_low,
+        "in_zone": FIB_ZONE_LOW <= ratio <= FIB_ZONE_HIGH,
+    })
+    if result["in_zone"]:
+        result["reasons"].append(f"OK: 5M Fibonacci pullback zone ({ratio*100:.1f}%)")
+    elif ratio < FIB_ZONE_LOW:
+        result["reasons"].append(f"INFO: shallow Fibonacci pullback ({ratio*100:.1f}%)")
+    else:
+        result["reasons"].append(f"WATCH: deep Fibonacci pullback ({ratio*100:.1f}%)")
+    return result
+
+
+def analyze_support_resistance(df5, trend):
+    """Check whether price is near a meaningful 5M support/resistance level."""
+    result = {
+        "near_level": False,
+        "level_type": "NONE",
+        "level": None,
+        "distance_atr": None,
+        "reasons": [],
+    }
+    if df5 is None or df5.empty or len(df5) < 20 or trend not in ("BUY", "SELL"):
+        return result
+
+    atr = calculate_atr(df5)
+    recent_high, recent_low = _recent_swing_levels(df5)
+    current = safe_float(df5.iloc[-1]["close"])
+    if None in (atr, current, recent_high, recent_low) or atr <= 0:
+        return result
+
+    if trend == "BUY":
+        distance = abs(current - recent_low) / atr
+        result.update({"distance_atr": distance, "level": recent_low, "level_type": "SUPPORT"})
+        if distance <= SR_ATR_DISTANCE:
+            result["near_level"] = True
+            result["reasons"].append(f"OK: near 5M support ({recent_low:.2f})")
+        else:
+            result["reasons"].append("INFO: not near 5M support")
+    else:
+        distance = abs(recent_high - current) / atr
+        result.update({"distance_atr": distance, "level": recent_high, "level_type": "RESISTANCE"})
+        if distance <= SR_ATR_DISTANCE:
+            result["near_level"] = True
+            result["reasons"].append(f"OK: near 5M resistance ({recent_high:.2f})")
+        else:
+            result["reasons"].append("INFO: not near 5M resistance")
+    return result
+
+
+def analyze_5m_pullback(df5, trend):
+    """Confirm that the current short wave is a pullback, not a chase."""
+    result = {
+        "valid": False,
+        "reclaim": False,
+        "ratio": None,
+        "reasons": [],
+    }
+    if df5 is None or df5.empty or len(df5) < 25 or trend not in ("BUY", "SELL"):
+        return result
+
+    work = _ema_state(df5.copy(), 9, 20).reset_index(drop=True)
+    close = pd.to_numeric(work["close"], errors="coerce")
+    ema9 = pd.to_numeric(work["ema_fast"], errors="coerce")
+    ema20 = pd.to_numeric(work["ema_slow"], errors="coerce")
+    current = safe_float(close.iloc[-1])
+    previous = safe_float(close.iloc[-2])
+    e9 = safe_float(ema9.iloc[-1])
+    pe9 = safe_float(ema9.iloc[-2])
+    e20 = safe_float(ema20.iloc[-1])
+    if None in (current, previous, e9, pe9, e20):
+        return result
+
+    fib = analyze_fibonacci_zone(df5, trend)
+    ratio = fib["ratio"]
+    result["ratio"] = ratio
+
+    if trend == "BUY":
+        reclaim = previous <= pe9 and current >= e9
+        aligned = e9 > e20
+    else:
+        reclaim = previous >= pe9 and current <= e9
+        aligned = e9 < e20
+
+    result["reclaim"] = reclaim
+    result["valid"] = bool(aligned and ratio is not None and PULLBACK_MIN_RATIO <= ratio <= PULLBACK_MAX_RATIO)
+    if result["valid"]:
+        result["reasons"].append("OK: 5M structural pullback")
+    else:
+        result["reasons"].append("WAIT: 5M structural pullback")
+    if reclaim:
+        result["reasons"].append("OK: 5M EMA9 reclaim")
+    else:
+        result["reasons"].append("WAIT: 5M EMA9 reclaim")
+    return result
+
+
+def analyze_v6_reversal(df5, trend):
+    divergence = detect_5m_divergence(df5, trend)
+    pattern = detect_5m_reversal_pattern(df5, trend)
+    structure = detect_5m_structure_shift(df5, trend)
+
+    confirmations = 0
+    if divergence["detected"]:
+        confirmations += 1
+    if pattern["detected"]:
+        confirmations += 1
+    if structure["shift"]:
+        confirmations += 1
+    if structure["ema_cross"]:
+        confirmations += 1
+
+    # Momentum by itself is weaker evidence, so it does not count as a full reversal.
+    reversal = confirmations >= REVERSAL_CONFIRMATIONS
+    reasons = []
+    reasons.extend(divergence["reasons"])
+    reasons.extend(pattern["reasons"])
+    reasons.extend(structure["reasons"])
+    if reversal:
+        reasons.append(f"BLOCK: 5M reversal evidence ({confirmations} confirmations)")
+    elif confirmations == 1:
+        reasons.append("WATCH: early 5M reversal evidence")
+    else:
+        reasons.append("OK: no confirmed 5M reversal")
+
+    return {
+        "reversal": reversal,
+        "confirmations": confirmations,
+        "divergence": divergence,
+        "pattern": pattern,
+        "structure": structure,
+        "reasons": reasons,
+    }
+
+
+# =========================================================
+# MAIN SIGNAL V6
 # =========================================================
 
 def generate_scalper_signal(df15, df5, df1):
@@ -744,6 +1089,7 @@ def generate_scalper_signal(df15, df5, df1):
             "confidence": 0, "quality": "WEAK", "trend": "NONE",
             "rsi": None, "atr": None, "pattern": "NONE",
             "stage": "DATA", "trend_phase": "UNKNOWN", "wave_stage": "UNKNOWN",
+            "reversal_confirmations": 0,
             "reasons": ["Insufficient market data"],
         }
 
@@ -760,54 +1106,65 @@ def generate_scalper_signal(df15, df5, df1):
             "rsi": None, "atr": calculate_atr(df1), "pattern": "NONE",
             "stage": "WAIT", "trend_phase": phase, "wave_stage": "UNKNOWN",
             "trend_age_bars": trend_state["age_bars"],
+            "reversal_confirmations": 0,
             "reasons": ["WAIT: 15M trend"],
         }
 
     reasons.append(f"OK: 15M trend ({trend})")
     reasons.append(f"INFO: 15M trend phase ({phase})")
 
-    momentum = get_5m_momentum_state(df5, trend)
-    if momentum["shift"]:
-        reasons.append("⚡ INFO: rapid 5M trend shift detected")
+    # =====================================================
+    # 5M reversal engine — the key V6 improvement
+    # =====================================================
+    reversal = analyze_v6_reversal(df5, trend)
+    reasons.extend(reversal["reasons"])
 
-    reversal, reversal_warnings = detect_reversal_warning(df5, df1, trend)
-    if reversal:
-        reasons.extend(f"BLOCK: {w}" for w in reversal_warnings)
+    # A confirmed 5M reversal blocks continuation trades in the old 15M direction.
+    if reversal["reversal"]:
         return {
             "signal": "NO SIGNAL", "price": price, "score": 0,
             "confidence": 0, "quality": "WEAK", "trend": trend,
+            "trend_phase": phase, "trend_age_bars": trend_state["age_bars"],
             "rsi": None, "atr": calculate_atr(df1), "pattern": "NONE",
-            "stage": "REVERSAL_WARNING", "trend_phase": phase,
-            "trend_age_bars": trend_state["age_bars"], "wave_stage": "REVERSAL_RISK",
+            "pattern_direction": "NONE", "stage": "REVERSAL_WARNING",
+            "wave_stage": "REVERSAL_5M", "reversal_confirmations": reversal["confirmations"],
+            "reversal_type": reversal["divergence"]["type"],
             "reasons": reasons,
         }
 
-    # Score measures confirmation strength only. It can NEVER override structure/timing.
-    score = 25
+    # =====================================================
+    # 5M pullback / Fibonacci / S&R
+    # =====================================================
+    pullback5 = analyze_5m_pullback(df5, trend)
+    fib = analyze_fibonacci_zone(df5, trend)
+    sr = analyze_support_resistance(df5, trend)
+    reasons.extend(pullback5["reasons"])
+    reasons.extend(fib["reasons"])
+    reasons.extend(sr["reasons"])
 
-    ema_ok = check_5m_ema(df5, trend)
-    if ema_ok:
+    # =====================================================
+    # 1M entry confirmation
+    # =====================================================
+    score = 20  # 15M trend
+
+    if pullback5["valid"]:
         score += 20
-        reasons.append("OK: 5M EMA9")
-    else:
-        reasons.append("WAIT: 5M EMA9")
+    if pullback5["reclaim"]:
+        score += 10
+    if fib["in_zone"]:
+        score += 10
+    if sr["near_level"]:
+        score += 10
 
-    if momentum["ok"] and momentum["slope_ok"]:
-        score += 15
-        reasons.append("OK: 5M momentum")
-    elif momentum["ok"]:
-        score += 8
-        reasons.append("WATCH: 5M momentum flat")
-    else:
-        reasons.append("WAIT: 5M momentum")
-
+    # 1M RSI
     rsi_ok, rsi = check_rsi(df1, trend)
     if rsi_ok:
-        score += 15
+        score += 10
         reasons.append("OK: 1M RSI")
     else:
         reasons.append("WAIT: 1M RSI")
 
+    # 1M candle strength
     candle = candle_info(last1)
     candle_ok = (candle["bullish"] and candle["strong"]) if trend == "BUY" else (candle["bearish"] and candle["strong"])
     if candle_ok:
@@ -816,71 +1173,55 @@ def generate_scalper_signal(df15, df5, df1):
     else:
         reasons.append("WAIT: candle")
 
+    # 1M pattern must agree with trend when present
     pattern = detect_candlestick_pattern(df1)
     pattern_side = pattern_direction(pattern)
     if pattern != "NONE" and pattern_side == trend:
-        score += 15
+        score += 10
         reasons.append(f"OK: {pattern}")
     elif pattern != "NONE":
-        reasons.append(f"WAIT: opposite pattern ({pattern})")
+        reasons.append(f"WAIT: opposite 1M pattern ({pattern})")
     else:
-        reasons.append("WAIT: candlestick pattern")
+        reasons.append("INFO: no 1M candlestick pattern")
 
     timing = analyze_entry_timing(df1, trend)
     reasons.extend(timing["reasons"])
 
-    wave = analyze_impulse_wave(df1, trend)
-    reasons.extend(wave["reasons"])
-
     # =====================================================
-    # HARD STRUCTURAL ENTRY RULES
+    # ENTRY RULES — no chasing
     # =====================================================
-
     hard_block = False
 
-    # Late trend: no chasing. A late move is allowed only after a fresh structural pullback + reclaim,
-    # and even then the price must not be too deep in the original impulse.
     if phase == "LATE":
-        if not (wave["fresh_pullback"] and wave["reclaim"] and wave["wave_position"] is not None and wave["wave_position"] < 0.70):
-            reasons.append("BLOCK: LATE trend requires fresh structural pullback + reclaim")
+        if not (pullback5["valid"] and pullback5["reclaim"] and fib["in_zone"]):
+            reasons.append("BLOCK: LATE trend requires fresh 5M pullback + reclaim + Fibonacci zone")
             hard_block = True
 
-    # Mature trend: pullback/reclaim required. No continuation chase.
     if phase == "MATURE":
-        if not (wave["fresh_pullback"] and wave["reclaim"]):
-            reasons.append("BLOCK: MATURE trend requires fresh structural pullback + reclaim")
+        if not (pullback5["valid"] and pullback5["reclaim"]):
+            reasons.append("BLOCK: MATURE trend requires fresh 5M pullback + reclaim")
             hard_block = True
-
-    # Deep impulse: score does not matter.
-    if wave["chasing"]:
-        reasons.append("BLOCK: entry is chasing the current impulse")
-        hard_block = True
-
-    # If position is beyond 78% of the identified impulse, only a new structural cycle may reset entry.
-    if wave["wave_position"] is not None and wave["wave_position"] >= HARD_MAX_ENTRY_POSITION:
-        reasons.append("BLOCK: price is in the final part of the impulse")
-        hard_block = True
 
     if timing["near_extreme"]:
-        reasons.append("BLOCK: entry too close to recent extreme")
+        reasons.append("BLOCK: entry too close to recent 1M extreme")
         hard_block = True
 
     if timing["extended"]:
         reasons.append("BLOCK: price extended from 1M EMA9")
         hard_block = True
 
-    # A pullback/reclaim is only considered a valid new entry when it is structural, not a 1-candle dip.
-    if phase in ("MATURE", "LATE") and wave["fresh_pullback"] and not wave["reclaim"]:
-        reasons.append("BLOCK: pullback exists but reclaim is not confirmed")
+    # Never enter against a 5M warning when it is becoming serious.
+    if reversal["confirmations"] == 1 and phase in ("MATURE", "LATE"):
+        reasons.append("BLOCK: mature/late trend has early 5M reversal evidence")
         hard_block = True
 
     confidence = min(int(score), 100)
     signal = "NO SIGNAL"
 
-    if score >= SIGNAL_SCORE and not hard_block and timing["timing_ok"] and wave["structure_ok"]:
+    if score >= SIGNAL_SCORE and not hard_block and timing["timing_ok"]:
         signal = trend
     elif score >= SIGNAL_SCORE:
-        reasons.append("BLOCK: structural entry filter")
+        reasons.append("BLOCK: structural/timing filter")
 
     if score >= 90:
         quality = "VERY STRONG"
@@ -896,6 +1237,9 @@ def generate_scalper_signal(df15, df5, df1):
 
     stage = "ENTRY" if signal in ("BUY", "SELL") else ("WATCH" if score >= WATCH_SCORE else "WAIT")
 
+    # Keep legacy wave fields so main.py and telegram_bot.py remain compatible.
+    wave = analyze_impulse_wave(df1, trend)
+
     return {
         "signal": signal,
         "price": price,
@@ -910,23 +1254,32 @@ def generate_scalper_signal(df15, df5, df1):
         "pattern": pattern,
         "pattern_direction": pattern_side,
         "entry_timing_ok": bool(timing["timing_ok"] and not hard_block),
-        "pullback": bool(wave["fresh_pullback"] and wave["reclaim"]),
+        "pullback": bool(pullback5["valid"] and pullback5["reclaim"]),
         "near_extreme": timing["near_extreme"],
         "extended": timing["extended"],
         "extension_atr": timing["extension_atr"],
         "recent_high": timing["recent_high"],
         "recent_low": timing["recent_low"],
-        "wave_stage": wave["wave_stage"],
+        "wave_stage": "PULLBACK" if pullback5["valid"] else wave["wave_stage"],
         "wave_low": wave["wave_low"],
         "wave_high": wave["wave_high"],
         "wave_range": wave["wave_range"],
         "wave_position": wave["wave_position"],
-        "pullback_ratio": wave["pullback_ratio"],
+        "pullback_ratio": fib["ratio"],
         "pullback_atr": wave["pullback_atr"],
-        "fresh_pullback": wave["fresh_pullback"],
-        "reclaim": wave["reclaim"],
-        "chasing": wave["chasing"],
-        "structure_ok": wave["structure_ok"],
+        "fresh_pullback": pullback5["valid"],
+        "reclaim": pullback5["reclaim"],
+        "chasing": bool(timing["near_extreme"] or timing["extended"]),
+        "structure_ok": bool(pullback5["valid"] and not hard_block),
+        "reversal_confirmations": reversal["confirmations"],
+        "reversal_type": reversal["divergence"]["type"],
+        "fib_in_zone": fib["in_zone"],
+        "fib_ratio": fib["ratio"],
+        "fib_swing_high": fib["swing_high"],
+        "fib_swing_low": fib["swing_low"],
+        "near_support_resistance": sr["near_level"],
+        "sr_level_type": sr["level_type"],
+        "sr_level": sr["level"],
         "stage": stage,
         "reasons": reasons,
         "time": str(last1.get("time", "")),
