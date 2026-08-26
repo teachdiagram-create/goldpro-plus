@@ -56,7 +56,7 @@ if STRATEGY_MODE == "SCALPER":
     )
 
     print(
-        "🧠 Strategy Loaded: GoldPro+ Scalper V6"
+        "🧠 Strategy Loaded: GoldPro+ Scalper V7"
     )
 
 else:
