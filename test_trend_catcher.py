@@ -42,3 +42,8 @@ def test_trend_catcher(days_back=5, interval="15min"):
 
 if __name__ == "__main__":
     test_trend_catcher(days_back=7, interval="15min")
+# در تابع test_trend_catcher، خط:
+result = trend_catcher_signal(current_df)
+
+# را به:
+result = trend_catcher_signal(current_df, rsi_buy=50, rsi_sell=50)
