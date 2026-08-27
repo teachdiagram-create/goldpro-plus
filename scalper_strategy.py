@@ -16,51 +16,103 @@ import pandas as pd
 
 
 # =========================================================
-# SETTINGS
+# EASY MODE (برای تست سریع - فقط برای آزمایش!)
+# =========================================================
+# اگر True باشد، تمام محدودیت‌های سخت‌گیرانه کاهش می‌یابند
+# تا تعداد سیگنال‌ها افزایش یابد.
+# ⚠️ این حالت فقط برای تست است و برای معاملات واقعی مناسب نیست.
 # =========================================================
 
-EMA_FAST = 9
-EMA_TREND_FAST = 9
-EMA_TREND_SLOW = 20
-RSI_PERIOD = 14
+EASY_MODE = True   # آن را به True یا False تغییر دهید
 
-SIGNAL_SCORE = 75
-WATCH_SCORE = 60
-CANDLE_BODY_MIN = 0.45
 
-# V5 legacy wave settings (kept for compatibility)
-WAVE_LOOKBACK_1M = 60
-PULLBACK_LOOKBACK_1M = 15
-MIN_PULLBACK_RATIO = 0.30
-MAX_ENTRY_POSITION = 0.68
-HARD_MAX_ENTRY_POSITION = 0.78
-MIN_PULLBACK_ATR = 1.20
+# =========================================================
+# SETTINGS (با پشتیبانی از EASY_MODE)
+# =========================================================
 
-# Extension / extreme filters
-MAX_EXTENSION_ATR = 2.00
-NEAR_EXTREME_ATR = 0.65
+if EASY_MODE:
+    # ---------- حالت آسان (تست سریع) ----------
+    EMA_FAST = 9
+    EMA_TREND_FAST = 9
+    EMA_TREND_SLOW = 20
+    RSI_PERIOD = 14
 
-# Fast 5M trend-change detection
-FAST_CROSS_LOOKBACK_5M = 3
+    SIGNAL_SCORE = 55
+    WATCH_SCORE = 45
+    CANDLE_BODY_MIN = 0.30
 
-# V7: short-wave reversal engine
-# V7 uses multiple independent 5M reversal categories.
-# A structure break is intentionally weighted more heavily than a single
-# candle/EMA event so the strategy can react before 15M changes.
-SWING_LOOKBACK_5M = 24
-DIVERGENCE_LOOKBACK_5M = 18
-REVERSAL_CONFIRMATIONS = 4
-REVERSAL_WARNING_SCORE = 2
-PIVOT_LEFT_RIGHT = 1
-DIVERGENCE_MIN_RSI_GAP = 2.5
-REVERSAL_SR_ATR = 0.80
-PULLBACK_MIN_RATIO = 0.20
-PULLBACK_MAX_RATIO = 0.72
-FIB_ZONE_LOW = 0.382
-FIB_ZONE_HIGH = 0.618
-SR_ATR_DISTANCE = 0.75
-STRUCTURE_BREAK_LOOKBACK = 6
+    WAVE_LOOKBACK_1M = 60
+    PULLBACK_LOOKBACK_1M = 15
+    MIN_PULLBACK_RATIO = 0.08
+    MAX_ENTRY_POSITION = 0.75
+    HARD_MAX_ENTRY_POSITION = 0.85
+    MIN_PULLBACK_ATR = 0.80
 
+    MAX_EXTENSION_ATR = 2.50
+    NEAR_EXTREME_ATR = 0.20
+
+    FAST_CROSS_LOOKBACK_5M = 3
+
+    SWING_LOOKBACK_5M = 24
+    DIVERGENCE_LOOKBACK_5M = 18
+    REVERSAL_CONFIRMATIONS = 2
+    REVERSAL_WARNING_SCORE = 1
+    PIVOT_LEFT_RIGHT = 1
+    DIVERGENCE_MIN_RSI_GAP = 2.5
+    REVERSAL_SR_ATR = 0.80
+    PULLBACK_MIN_RATIO_5M = 0.08   # برای 5M pullback
+    PULLBACK_MAX_RATIO_5M = 0.80
+    FIB_ZONE_LOW = 0.382
+    FIB_ZONE_HIGH = 0.618
+    SR_ATR_DISTANCE = 0.75
+    STRUCTURE_BREAK_LOOKBACK = 6
+
+    RSI_OVERSOLD = 25
+    RSI_OVERBOUGHT = 75
+    RSI_BUY_LEVEL = 40
+    RSI_SELL_LEVEL = 60
+
+else:
+    # ---------- حالت عادی (سخت‌گیرانه) ----------
+    EMA_FAST = 9
+    EMA_TREND_FAST = 9
+    EMA_TREND_SLOW = 20
+    RSI_PERIOD = 14
+
+    SIGNAL_SCORE = 75
+    WATCH_SCORE = 60
+    CANDLE_BODY_MIN = 0.45
+
+    WAVE_LOOKBACK_1M = 60
+    PULLBACK_LOOKBACK_1M = 15
+    MIN_PULLBACK_RATIO = 0.30
+    MAX_ENTRY_POSITION = 0.68
+    HARD_MAX_ENTRY_POSITION = 0.78
+    MIN_PULLBACK_ATR = 1.20
+
+    MAX_EXTENSION_ATR = 2.00
+    NEAR_EXTREME_ATR = 0.65
+
+    FAST_CROSS_LOOKBACK_5M = 3
+
+    SWING_LOOKBACK_5M = 24
+    DIVERGENCE_LOOKBACK_5M = 18
+    REVERSAL_CONFIRMATIONS = 4
+    REVERSAL_WARNING_SCORE = 2
+    PIVOT_LEFT_RIGHT = 1
+    DIVERGENCE_MIN_RSI_GAP = 2.5
+    REVERSAL_SR_ATR = 0.80
+    PULLBACK_MIN_RATIO_5M = 0.20
+    PULLBACK_MAX_RATIO_5M = 0.72
+    FIB_ZONE_LOW = 0.382
+    FIB_ZONE_HIGH = 0.618
+    SR_ATR_DISTANCE = 0.75
+    STRUCTURE_BREAK_LOOKBACK = 6
+
+    RSI_OVERSOLD = 30
+    RSI_OVERBOUGHT = 70
+    RSI_BUY_LEVEL = 35
+    RSI_SELL_LEVEL = 65
 
 
 # =========================================================
@@ -364,8 +416,9 @@ def check_rsi(df1, trend):
     if None in (current, previous):
         return False, current
     if trend == "BUY":
-        return ((50 <= current <= 68) or (previous <= 50 and current > previous)), current
-    return ((32 <= current <= 50) or (previous >= 50 and current < previous)), current
+        return ((RSI_BUY_LEVEL <= current <= 68) or (previous <= RSI_BUY_LEVEL and current > previous)), current
+    return ((32 <= current <= RSI_SELL_LEVEL) or (previous >= RSI_SELL_LEVEL and current < previous)), current
+
 
 
 # =========================================================
@@ -416,7 +469,6 @@ def analyze_impulse_wave(df1, trend):
             result["reasons"].append("BLOCK: no bullish impulse found")
             return result
 
-        # Lowest point before the impulse high.
         low_slice = lows.iloc[:high_idx + 1]
         low_idx = int(low_slice.idxmin())
         wave_low = safe_float(lows.iloc[low_idx])
@@ -442,7 +494,6 @@ def analyze_impulse_wave(df1, trend):
             if atr and atr > 0:
                 pullback_atr = (wave_high - pullback_low) / atr
 
-        # Pullback must be recent. A pullback from an old high is not a fresh entry.
         recent_pullback = pullback_idx is not None and pullback_idx >= max(0, len(work) - PULLBACK_LOOKBACK_1M)
 
         ema = calculate_ema(work["close"], 9)
@@ -460,7 +511,6 @@ def analyze_impulse_wave(df1, trend):
             and pullback_atr >= MIN_PULLBACK_ATR
         )
 
-        # If price has already travelled deep into the impulse, a small 1M bounce is chasing.
         chasing = (
             position >= HARD_MAX_ENTRY_POSITION
             or (position >= MAX_ENTRY_POSITION and not fresh_pullback)
@@ -613,7 +663,6 @@ def analyze_impulse_wave(df1, trend):
 
     return result
 
-
 # =========================================================
 # ENTRY TIMING / EXTENSION FILTER
 # =========================================================
@@ -695,7 +744,6 @@ def analyze_entry_timing(df1, trend):
         else:
             result["reasons"].append("INFO: entry not near extreme")
 
-    # Do not hard-block solely on one weakening EMA tick; wave structure decides.
     if result["momentum_weak"]:
         result["reasons"].append("WATCH: 1M EMA9 momentum weakening")
 
@@ -772,7 +820,6 @@ def _rsi_series(df, period=RSI_PERIOD):
 
 
 def _pivot_points(df, left=PIVOT_LEFT_RIGHT, right=PIVOT_LEFT_RIGHT):
-    """Return confirmed local swing highs/lows using closed candles only."""
     if df is None or df.empty or len(df) < left + right + 3:
         return [], []
     highs = pd.to_numeric(df["high"], errors="coerce").reset_index(drop=True)
@@ -792,7 +839,6 @@ def _pivot_points(df, left=PIVOT_LEFT_RIGHT, right=PIVOT_LEFT_RIGHT):
 
 
 def detect_5m_divergence(df5, trend):
-    """Detect RSI divergence from actual 5M swing pairs, not half-window extremes."""
     result = {"detected": False, "type": "NONE", "strength": 0, "reasons": []}
     if df5 is None or df5.empty or len(df5) < DIVERGENCE_LOOKBACK_5M or trend not in ("BUY", "SELL"):
         return result
@@ -815,7 +861,6 @@ def detect_5m_divergence(df5, trend):
 
 
 def detect_5m_reversal_pattern(df5, trend):
-    """Look for a reversal candle/pattern against the active 15M trend."""
     result = {"detected": False, "pattern": "NONE", "strength": 0, "reasons": []}
     if df5 is None or len(df5) < 3 or trend not in ("BUY", "SELL"):
         return result
@@ -845,7 +890,6 @@ def detect_5m_reversal_pattern(df5, trend):
 
 
 def detect_5m_structure_shift(df5, trend):
-    """Fast CHoCH/BOS detector using recent confirmed swing structure."""
     result = {
         "shift": False, "break_level": None, "reclaim": False,
         "ema_cross": False, "momentum": False, "choch": False,
@@ -874,7 +918,6 @@ def detect_5m_structure_shift(df5, trend):
     sl1, sl2 = swing_lows[-2][1], swing_lows[-1][1]
 
     if trend == "BUY":
-        # Existing bullish structure is HH/HL. A break of the latest HL is CHoCH.
         if sl2 > sl1:
             result["higher_low"] = True
         if last < sl2:
@@ -891,7 +934,6 @@ def detect_5m_structure_shift(df5, trend):
             result["momentum"] = True
             result["reasons"].append("5M downside momentum")
     else:
-        # Existing bearish structure is LL/LH. A break of the latest LH is CHoCH.
         if sh2 < sh1:
             result["lower_high"] = True
         if last > sh2:
@@ -911,7 +953,6 @@ def detect_5m_structure_shift(df5, trend):
 
 
 def analyze_v7_reversal(df5, trend):
-    """Combine independent 5M reversal evidence into WARNING/CONFIRMED states."""
     divergence = detect_5m_divergence(df5, trend)
     pattern = detect_5m_reversal_pattern(df5, trend)
     structure = detect_5m_structure_shift(df5, trend)
@@ -933,7 +974,6 @@ def analyze_v7_reversal(df5, trend):
     if sr["near_level"]:
         score += 1.0; categories += 1; evidence.append(sr["level_type"])
 
-    # One strong CHoCH is enough for a WARNING, but confirmation needs another category.
     confirmed = (structure["choch"] and categories >= 2 and score >= REVERSAL_CONFIRMATIONS) or score >= REVERSAL_CONFIRMATIONS + 1
     warning = score >= REVERSAL_WARNING_SCORE
 
@@ -973,8 +1013,8 @@ def analyze_v7_reversal(df5, trend):
         "evidence": evidence,
     }
 
+
 def analyze_fibonacci_zone(df5, trend):
-    """Use the latest 5M swing to identify a healthy retracement zone."""
     result = {
         "valid": False,
         "in_zone": False,
@@ -1002,7 +1042,6 @@ def analyze_fibonacci_zone(df5, trend):
 
     rng = swing_high - swing_low
     if trend == "BUY":
-        # Pullback from high toward low: 38.2-61.8% retracement is the preferred zone.
         ratio = (swing_high - current) / rng
     else:
         ratio = (current - swing_low) / rng
@@ -1024,7 +1063,6 @@ def analyze_fibonacci_zone(df5, trend):
 
 
 def analyze_support_resistance(df5, trend):
-    """Check whether price is near a meaningful 5M support/resistance level."""
     result = {
         "near_level": False,
         "level_type": "NONE",
@@ -1061,7 +1099,6 @@ def analyze_support_resistance(df5, trend):
 
 
 def analyze_5m_pullback(df5, trend):
-    """Confirm that the current short wave is a pullback, not a chase."""
     result = {
         "valid": False,
         "reclaim": False,
@@ -1095,7 +1132,7 @@ def analyze_5m_pullback(df5, trend):
         aligned = e9 < e20
 
     result["reclaim"] = reclaim
-    result["valid"] = bool(aligned and ratio is not None and PULLBACK_MIN_RATIO <= ratio <= PULLBACK_MAX_RATIO)
+    result["valid"] = bool(aligned and ratio is not None and PULLBACK_MIN_RATIO_5M <= ratio <= PULLBACK_MAX_RATIO_5M)
     if result["valid"]:
         result["reasons"].append("OK: 5M structural pullback")
     else:
@@ -1106,47 +1143,8 @@ def analyze_5m_pullback(df5, trend):
         result["reasons"].append("WAIT: 5M EMA9 reclaim")
     return result
 
-
-def analyze_v6_reversal(df5, trend):
-    divergence = detect_5m_divergence(df5, trend)
-    pattern = detect_5m_reversal_pattern(df5, trend)
-    structure = detect_5m_structure_shift(df5, trend)
-
-    confirmations = 0
-    if divergence["detected"]:
-        confirmations += 1
-    if pattern["detected"]:
-        confirmations += 1
-    if structure["shift"]:
-        confirmations += 1
-    if structure["ema_cross"]:
-        confirmations += 1
-
-    # Momentum by itself is weaker evidence, so it does not count as a full reversal.
-    reversal = confirmations >= REVERSAL_CONFIRMATIONS
-    reasons = []
-    reasons.extend(divergence["reasons"])
-    reasons.extend(pattern["reasons"])
-    reasons.extend(structure["reasons"])
-    if reversal:
-        reasons.append(f"BLOCK: 5M reversal evidence ({confirmations} confirmations)")
-    elif confirmations == 1:
-        reasons.append("WATCH: early 5M reversal evidence")
-    else:
-        reasons.append("OK: no confirmed 5M reversal")
-
-    return {
-        "reversal": reversal,
-        "confirmations": confirmations,
-        "divergence": divergence,
-        "pattern": pattern,
-        "structure": structure,
-        "reasons": reasons,
-    }
-
-
 # =========================================================
-# MAIN SIGNAL V6
+# MAIN SIGNAL (با پشتیبانی از EASY_MODE)
 # =========================================================
 
 def generate_scalper_signal(df15, df5, df1):
@@ -1183,12 +1181,11 @@ def generate_scalper_signal(df15, df5, df1):
     reasons.append(f"INFO: 15M trend phase ({phase})")
 
     # =====================================================
-    # 5M reversal engine — the key V6 improvement
+    # 5M reversal engine
     # =====================================================
     reversal = analyze_v7_reversal(df5, trend)
     reasons.extend(reversal["reasons"])
 
-    # A confirmed 5M reversal blocks continuation trades in the old 15M direction.
     if reversal["reversal"]:
         return {
             "signal": "NO SIGNAL", "price": price, "score": 0,
@@ -1217,15 +1214,11 @@ def generate_scalper_signal(df15, df5, df1):
     # =====================================================
     # V7: early 5M reversal protection
     # =====================================================
-    # In MATURE/LATE phases, a WARNING is enough to stop a fresh
-    # continuation entry. This prevents the classic "sell at the
-    # end of the move" / "buy at the top" failure.
-    early_reversal_block = (
-        reversal["state"] == "WARNING"
-        and phase in ("MATURE", "LATE")
-    )
-    if early_reversal_block:
-        reasons.append("BLOCK: MATURE/LATE trend has 5M reversal WARNING")
+    early_reversal_block = False
+    if not EASY_MODE:
+        if reversal["state"] == "WARNING" and phase in ("MATURE", "LATE"):
+            reasons.append("BLOCK: MATURE/LATE trend has 5M reversal WARNING")
+            early_reversal_block = True
 
     # =====================================================
     # 1M entry confirmation
@@ -1258,7 +1251,7 @@ def generate_scalper_signal(df15, df5, df1):
     else:
         reasons.append("WAIT: candle")
 
-    # 1M pattern must agree with trend when present
+    # 1M pattern
     pattern = detect_candlestick_pattern(df1)
     pattern_side = pattern_direction(pattern)
     if pattern != "NONE" and pattern_side == trend:
@@ -1273,19 +1266,25 @@ def generate_scalper_signal(df15, df5, df1):
     reasons.extend(timing["reasons"])
 
     # =====================================================
-    # ENTRY RULES — no chasing
+    # ENTRY RULES (با در نظر گرفتن EASY_MODE)
     # =====================================================
     hard_block = early_reversal_block
 
-    if phase == "LATE":
-        if not (pullback5["valid"] and pullback5["reclaim"] and fib["in_zone"]):
-            reasons.append("BLOCK: LATE trend requires fresh 5M pullback + reclaim + Fibonacci zone")
-            hard_block = True
+    if not EASY_MODE:
+        if phase == "LATE":
+            if not (pullback5["valid"] and pullback5["reclaim"] and fib["in_zone"]):
+                reasons.append("BLOCK: LATE trend requires fresh 5M pullback + reclaim + Fibonacci zone")
+                hard_block = True
 
-    if phase == "MATURE":
-        if not (pullback5["valid"] and pullback5["reclaim"]):
-            reasons.append("BLOCK: MATURE trend requires fresh 5M pullback + reclaim")
-            hard_block = True
+        if phase == "MATURE":
+            if not (pullback5["valid"] and pullback5["reclaim"]):
+                reasons.append("BLOCK: MATURE trend requires fresh 5M pullback + reclaim")
+                hard_block = True
+    else:
+        # در حالت EASY، فقط یک هشدار می‌دهیم، نه بلاک
+        if phase in ("MATURE", "LATE"):
+            if not (pullback5["valid"] and pullback5["reclaim"]):
+                reasons.append("WATCH: MATURE/LATE trend could use pullback+reclaim")
 
     if timing["near_extreme"]:
         reasons.append("BLOCK: entry too close to recent 1M extreme")
@@ -1295,10 +1294,10 @@ def generate_scalper_signal(df15, df5, df1):
         reasons.append("BLOCK: price extended from 1M EMA9")
         hard_block = True
 
-    # Never enter against a 5M warning when it is becoming serious.
-    if reversal["confirmations"] == 1 and phase in ("MATURE", "LATE"):
-        reasons.append("BLOCK: mature/late trend has early 5M reversal evidence")
-        hard_block = True
+    if not EASY_MODE:
+        if reversal["confirmations"] == 1 and phase in ("MATURE", "LATE"):
+            reasons.append("BLOCK: mature/late trend has early 5M reversal evidence")
+            hard_block = True
 
     confidence = min(int(score), 100)
     signal = "NO SIGNAL"
@@ -1322,7 +1321,7 @@ def generate_scalper_signal(df15, df5, df1):
 
     stage = "ENTRY" if signal in ("BUY", "SELL") else ("WATCH" if score >= WATCH_SCORE else "WAIT")
 
-    # Keep legacy wave fields so main.py and telegram_bot.py remain compatible.
+    # Wave analysis (برای سازگاری با خروجی)
     wave = analyze_impulse_wave(df1, trend)
 
     return {
@@ -1373,3 +1372,4 @@ def generate_scalper_signal(df15, df5, df1):
         "reasons": reasons,
         "time": str(last1.get("time", "")),
     }
+
