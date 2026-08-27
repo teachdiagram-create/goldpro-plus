@@ -1,15 +1,15 @@
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from data_feed import get_market_data
 from scalper_strategy import generate_scalper_signal
 
-def quick_test(days_back=3):
+def quick_test(days_back=5):
     """تست سریع روی چند روز گذشته"""
     print("=" * 60)
     print("🚀 QUICK TEST - GoldPro+ Scalper V7")
     print("=" * 60)
     
-    # دریافت داده‌های بیشتر (۳ روز = ۴۳۲۰ کندل ۱ دقیقه‌ای)
+    # دریافت داده‌های بیشتر
     print("📥 Downloading data...")
     df1 = get_market_data("XAU/USD", "1min", outputsize=5000)
     df5 = get_market_data("XAU/USD", "5min", outputsize=2000)
@@ -21,8 +21,8 @@ def quick_test(days_back=3):
     
     print(f"✅ Data loaded: {len(df1)} candles (1M)")
     
-    # محدود کردن به چند روز اخیر
-    cutoff = datetime.now() - timedelta(days=days_back)
+    # محدود کردن به چند روز اخیر - با منطقه زمانی UTC
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)
     df1 = df1[df1['time'] >= cutoff].reset_index(drop=True)
     
     if len(df1) < 50:
@@ -35,12 +35,10 @@ def quick_test(days_back=3):
     signals = []
     total_candles = len(df1)
     
-    # شبیه‌سازی کندل به کندل
     for i in range(50, total_candles):
         current_df1 = df1.iloc[:i+1].copy()
         current_time = current_df1['time'].iloc[-1]
         
-        # یافتن داده‌های ۵ و ۱۵ دقیقه‌ای متناظر
         current_df5 = df5[df5['time'] <= current_time].tail(50)
         current_df15 = df15[df15['time'] <= current_time].tail(30)
         
@@ -58,18 +56,14 @@ def quick_test(days_back=3):
                 'price': result.get('price'),
                 'score': score,
                 'quality': result.get('quality'),
-                'reasons': result.get('reasons', [])[:3],  # فقط ۳ دلیل اول
+                'reasons': result.get('reasons', [])[:3],
             })
-            
-            # چاپ سیگنال به‌محض پیدا شدن
             print(f"🟢 {signal} at {current_time}")
             print(f"   Price: {result.get('price')}")
             print(f"   Score: {score}/100")
             print(f"   Quality: {result.get('quality')}")
-            print(f"   Reasons: {result.get('reasons', [])[:3]}")
             print("-" * 40)
     
-    # گزارش نهایی
     print("=" * 60)
     print(f"📊 TEST COMPLETE")
     print(f"   Total signals found: {len(signals)}")
@@ -83,11 +77,9 @@ def quick_test(days_back=3):
         print(f"   Last signal: {signals[-1]['time']} - {signals[-1]['signal']} @ {signals[-1]['price']}")
     else:
         print("   ⚠️ No signals found in the tested period.")
-        print("   💡 Try increasing days_back or check market conditions.")
+        print("   💡 Try increasing days_back to 10 or 20.")
     
     print("=" * 60)
 
 if __name__ == "__main__":
-    # تست روی ۵ روز اخیر (می‌توانید عدد را تغییر دهید)
-    quick_test(days_back=5)
-
+    quick_test(days_back=5)   # می‌توانید به 10 یا 20 افزایش دهید
