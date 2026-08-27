@@ -90,3 +90,4 @@ def quick_test(days_back=3):
 if __name__ == "__main__":
     # تست روی ۵ روز اخیر (می‌توانید عدد را تغییر دهید)
     quick_test(days_back=5)
+
