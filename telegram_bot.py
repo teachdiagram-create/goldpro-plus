@@ -1,7 +1,7 @@
 # telegram_bot.py
 import os
-import requests
 import logging
+import requests
 
 logger = logging.getLogger(__name__)
 
