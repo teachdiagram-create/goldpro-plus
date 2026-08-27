@@ -19,38 +19,31 @@ from indicators import add_indicators
 # SETTINGS
 # =========================================================
 
-# ----- اسکور نهایی -----
 MIN_SCORE = 70
 STRONG_SCORE = 85
 
-# ----- EMA Settings -----
 EMA_FAST = 9
 EMA_SLOW = 20
 EMA_TREND = 50
 
-# ----- RSI Settings -----
 RSI_PERIOD = 14
 RSI_OVERSOLD = 30
 RSI_OVERBOUGHT = 70
 RSI_NEUTRAL_LOW = 40
 RSI_NEUTRAL_HIGH = 60
 
-# -----风险管理 -----
 RISK_PER_TRADE = 1.5
 STOP_LOSS_ATR = 1.5
 TAKE_PROFIT_ATR = 2.5
 MAX_SPREAD = 0.5
 
-# ----- حجم و نوسان -----
 MIN_VOLUME_RATIO = 1.2
 MAX_ATR_CHANGE = 2.0
 
-# ----- فیلترهای ورود -----
 PULLBACK_MIN = 0.30
 PULLBACK_MAX = 0.70
 FIB_LEVELS = [0.382, 0.500, 0.618]
 
-# ----- فیلترهای خروج -----
 TRAILING_STOP = 0.5
 
 
@@ -75,17 +68,14 @@ def calculate_rsi(series, period=RSI_PERIOD):
 def calculate_atr(df, period=14):
     if df is None or df.empty or len(df) < 2:
         return None
-    
     high = pd.to_numeric(df["high"], errors="coerce")
     low = pd.to_numeric(df["low"], errors="coerce")
     close = pd.to_numeric(df["close"], errors="coerce")
     previous_close = close.shift(1)
-    
     tr1 = high - low
     tr2 = (high - previous_close).abs()
     tr3 = (low - previous_close).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-    
     atr = tr.ewm(alpha=1/period, adjust=False).mean()
     return float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else None
 
@@ -115,21 +105,15 @@ def get_previous(df):
 def prepare_data(df):
     if df is None or df.empty:
         return None
-    
     df_copy = df.copy()
-    
     try:
         df_result = add_indicators(df_copy)
-        
         required = ["EMA20", "EMA50", "RSI", "ATR"]
         missing = [col for col in required if col not in df_result.columns]
-        
         if missing:
             print(f"[Hybrid] Warning: Missing {missing}, calculating manually")
             df_result = calculate_indicators_manually(df_copy)
-        
         return df_result
-        
     except Exception as e:
         print(f"[Hybrid] Indicator error: {e}")
         return calculate_indicators_manually(df_copy)
@@ -138,16 +122,10 @@ def prepare_data(df):
 def calculate_indicators_manually(df):
     if df is None or df.empty:
         return df
-    
-    # EMAs
     df["EMA9"] = calculate_ema(df["close"], EMA_FAST)
     df["EMA20"] = calculate_ema(df["close"], EMA_SLOW)
     df["EMA50"] = calculate_ema(df["close"], EMA_TREND)
-    
-    # RSI
     df["RSI"] = calculate_rsi(df["close"])
-    
-    # ATR
     atr_values = []
     for i in range(len(df)):
         if i < 14:
@@ -155,7 +133,6 @@ def calculate_indicators_manually(df):
         else:
             atr_values.append(calculate_atr(df.iloc[:i+1]))
     df["ATR"] = atr_values
-    
     return df
 
 
@@ -166,7 +143,6 @@ def calculate_indicators_manually(df):
 def _bars_since_condition(condition, max_bars=50):
     if condition is None:
         return None
-    
     count = 0
     for i in range(len(condition)-1, -1, -1):
         if condition.iloc[i]:
@@ -175,7 +151,6 @@ def _bars_since_condition(condition, max_bars=50):
             break
         if count >= max_bars:
             break
-    
     return count if count > 0 else None
 
 
@@ -187,25 +162,19 @@ def analyze_trend_15m(df15):
         "age": None,
         "reasons": []
     }
-    
     if df15 is None or len(df15) < 30:
         result["reasons"].append("Insufficient 15M data")
         return result
-    
     last = get_latest(df15)
     price = safe_float(last.get("close"))
     ema9 = safe_float(last.get("EMA9"))
     ema20 = safe_float(last.get("EMA20"))
     ema50 = safe_float(last.get("EMA50"))
     rsi = safe_float(last.get("RSI"))
-    
     if None in (price, ema9, ema20, ema50, rsi):
         result["reasons"].append("Missing indicators")
         return result
-    
     score = 0
-    
-    # 1. EMA Alignment
     if price > ema9 > ema20 > ema50:
         result["trend"] = "BUY"
         score += 30
@@ -216,25 +185,19 @@ def analyze_trend_15m(df15):
         result["trend"] = "NONE"
         result["reasons"].append("EMAs not aligned")
         return result
-    
-    # 2. RSI confirmation
     if result["trend"] == "BUY" and rsi > 50:
         score += 20
     elif result["trend"] == "SELL" and rsi < 50:
         score += 20
     else:
         result["reasons"].append("RSI neutral")
-    
-    # 3. Trend age
     if "EMA9" in df15.columns and "EMA20" in df15.columns:
         spread = df15["EMA9"] - df15["EMA20"]
         if result["trend"] == "BUY":
             age = _bars_since_condition(spread > 0)
         else:
             age = _bars_since_condition(spread < 0)
-        
         result["age"] = age
-        
         if age is None:
             result["phase"] = "UNKNOWN"
         elif age <= 3:
@@ -249,10 +212,8 @@ def analyze_trend_15m(df15):
             result["phase"] = "LATE"
             score -= 10
             result["reasons"].append("Late trend, caution")
-    
     result["strength"] = score
     result["reasons"].append(f"15M Trend: {result['trend']} ({result['phase']})")
-    
     return result
 
 
@@ -267,32 +228,25 @@ def analyze_fibonacci(df, trend, lookback=24):
         "level": None,
         "reasons": []
     }
-    
     if df is None or len(df) < lookback:
         return result
-    
     work = df.tail(lookback)
     high = safe_float(work["high"].max())
     low = safe_float(work["low"].min())
     current = safe_float(work["close"].iloc[-1])
-    
     if None in (high, low, current) or high == low:
         return result
-    
     if trend == "BUY":
         ratio = (high - current) / (high - low)
     else:
         ratio = (current - low) / (high - low)
-    
     result["ratio"] = ratio
-    
     for level in FIB_LEVELS:
         if abs(ratio - level) < 0.05:
             result["in_zone"] = True
             result["level"] = level
             result["reasons"].append(f"Fibonacci {level*100:.1f}%")
             break
-    
     return result
 
 
@@ -303,18 +257,14 @@ def detect_reversal_5m(df5, trend):
         "strength": 0,
         "reasons": []
     }
-    
     if df5 is None or len(df5) < 10:
         return result
-    
     last = get_latest(df5)
     prev = get_previous(df5)
-    
     rsi_now = safe_float(last.get("RSI"))
     rsi_prev = safe_float(prev.get("RSI"))
     price_now = safe_float(last.get("close"))
     price_prev = safe_float(prev.get("close"))
-    
     if None not in (rsi_now, rsi_prev, price_now, price_prev):
         if trend == "BUY":
             if price_now > price_prev and rsi_now < rsi_prev:
@@ -328,7 +278,6 @@ def detect_reversal_5m(df5, trend):
                 result["type"] = "BULLISH_DIVERGENCE"
                 result["strength"] += 2
                 result["reasons"].append("Bullish RSI divergence")
-    
     return result
 
 
@@ -342,65 +291,48 @@ def analyze_momentum_5m(df5, trend):
         "reversal_warning": False,
         "reasons": []
     }
-    
     if df5 is None or len(df5) < 30 or trend not in ("BUY", "SELL"):
         result["reasons"].append("Insufficient 5M data")
         return result
-    
     last = get_latest(df5)
     prev = get_previous(df5)
-    
     price = safe_float(last.get("close"))
     prev_price = safe_float(prev.get("close"))
     ema9 = safe_float(last.get("EMA9"))
     ema20 = safe_float(last.get("EMA20"))
     atr = safe_float(last.get("ATR"))
-    
     if None in (price, prev_price, ema9, ema20, atr):
         result["reasons"].append("Missing 5M indicators")
         return result
-    
-    # 1. EMA alignment
     if trend == "BUY":
         aligned = ema9 > ema20
     else:
         aligned = ema9 < ema20
-    
     if not aligned:
         result["reasons"].append("5M EMAs not aligned with trend")
         return result
-    
     result["ok"] = True
     result["reasons"].append("5M EMAs aligned")
-    
-    # 2. Pullback detection
     if trend == "BUY":
         is_pullback = price < ema9
         is_reclaim = prev_price < ema9 and price > ema9
     else:
         is_pullback = price > ema9
         is_reclaim = prev_price > ema9 and price < ema9
-    
     result["pullback"] = is_pullback
     result["reclaim"] = is_reclaim
-    
     if is_pullback:
         result["reasons"].append("5M Pullback detected")
     if is_reclaim:
         result["reasons"].append("5M Reclaim detected")
-    
-    # 3. Fibonacci zone
     fib = analyze_fibonacci(df5, trend)
     result["fib_zone"] = fib["in_zone"]
     if fib["in_zone"]:
         result["reasons"].append(f"5M Fibonacci zone ({fib['ratio']*100:.1f}%)")
-    
-    # 4. Reversal warning
     reversal = detect_reversal_5m(df5, trend)
     result["reversal_warning"] = reversal["detected"]
     if reversal["detected"]:
         result["reasons"].append(f"5M reversal warning: {reversal['type']}")
-    
     return result
 
 
@@ -416,18 +348,13 @@ def analyze_entry_1m(df1, trend):
         "bb_ok": False,
         "reasons": []
     }
-    
     if df1 is None or len(df1) < 20 or trend not in ("BUY", "SELL"):
         result["reasons"].append("Insufficient 1M data")
         return result
-    
     last = get_latest(df1)
     prev = get_previous(df1)
-    
-    # 1. RSI
     rsi = safe_float(last.get("RSI"))
     rsi_prev = safe_float(prev.get("RSI"))
-    
     if None in (rsi, rsi_prev):
         result["reasons"].append("RSI missing")
     else:
@@ -445,12 +372,9 @@ def analyze_entry_1m(df1, trend):
             elif RSI_NEUTRAL_LOW <= rsi <= RSI_NEUTRAL_HIGH:
                 result["rsi_ok"] = True
                 result["reasons"].append("RSI neutral zone")
-    
-    # 2. Candle
     close = safe_float(last.get("close"))
     open_price = safe_float(last.get("open"))
     prev_close = safe_float(prev.get("close"))
-    
     if None in (close, open_price, prev_close):
         result["reasons"].append("Candle data missing")
     else:
@@ -462,14 +386,10 @@ def analyze_entry_1m(df1, trend):
             if close < open_price and close < prev_close:
                 result["candle_ok"] = True
                 result["reasons"].append("Bearish candle")
-    
-    # 3. نتیجه نهایی
     score = sum([result["rsi_ok"], result["candle_ok"], result["bb_ok"]])
-    result["ok"] = score >= 1  # حداقل ۱ شرط
-    
+    result["ok"] = score >= 1
     if not result["ok"]:
         result["reasons"].append("Entry conditions not met")
-    
     return result
 
 
@@ -486,47 +406,36 @@ def calculate_risk_management(df1, trend, account_balance=10000):
         "risk_reward": 0,
         "reasons": []
     }
-    
     if df1 is None or df1.empty or trend not in ("BUY", "SELL"):
         result["reasons"].append("No data for risk management")
         return result
-    
     last = get_latest(df1)
     price = safe_float(last.get("close"))
     atr = safe_float(last.get("ATR"))
-    
     if None in (price, atr) or atr <= 0:
         result["reasons"].append("Price or ATR missing")
         return result
-    
     result["entry"] = price
-    
     sl_distance = atr * STOP_LOSS_ATR
     tp_distance = atr * TAKE_PROFIT_ATR
-    
     if trend == "BUY":
         result["stop_loss"] = price - sl_distance
         result["take_profit"] = price + tp_distance
     else:
         result["stop_loss"] = price + sl_distance
         result["take_profit"] = price - tp_distance
-    
     risk_amount = account_balance * (RISK_PER_TRADE / 100)
     risk_per_unit = abs(price - result["stop_loss"])
-    
     if risk_per_unit > 0:
         result["position_size"] = risk_amount / risk_per_unit
     else:
         result["position_size"] = 0
-    
     reward = abs(result["take_profit"] - price)
     risk = abs(result["stop_loss"] - price)
-    
     if risk > 0:
         result["risk_reward"] = reward / risk
     else:
         result["risk_reward"] = 0
-    
     return result
 
 
@@ -535,10 +444,6 @@ def calculate_risk_management(df1, trend, account_balance=10000):
 # =========================================================
 
 def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
-    # =====================================================
-    # 1. DATA PREPARATION
-    # =====================================================
-    
     if df15 is None or df5 is None or df1 is None:
         return {
             "signal": "NO SIGNAL",
@@ -547,11 +452,9 @@ def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
             "quality": "WEAK",
             "reasons": ["Missing data"]
         }
-    
     df15 = prepare_data(df15)
     df5 = prepare_data(df5)
     df1 = prepare_data(df1)
-    
     if None in (df15, df5, df1):
         return {
             "signal": "NO SIGNAL",
@@ -560,14 +463,8 @@ def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
             "quality": "WEAK",
             "reasons": ["Failed to prepare data"]
         }
-    
-    # =====================================================
-    # 2. TREND ANALYSIS (15M)
-    # =====================================================
-    
     trend_result = analyze_trend_15m(df15)
     trend = trend_result["trend"]
-    
     if trend == "NONE":
         return {
             "signal": "NO SIGNAL",
@@ -577,13 +474,7 @@ def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
             "trend": "NONE",
             "reasons": trend_result["reasons"]
         }
-    
-    # =====================================================
-    # 3. MOMENTUM ANALYSIS (5M)
-    # =====================================================
-    
     momentum = analyze_momentum_5m(df5, trend)
-    
     if momentum["reversal_warning"]:
         return {
             "signal": "NO SIGNAL",
@@ -593,27 +484,13 @@ def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
             "trend": trend,
             "reasons": ["5M reversal warning"] + momentum["reasons"]
         }
-    
-    # =====================================================
-    # 4. ENTRY ANALYSIS (1M)
-    # =====================================================
-    
     entry = analyze_entry_1m(df1, trend)
-    
-    # =====================================================
-    # 5. SCORING
-    # =====================================================
-    
     score = 0
     reasons = []
     filters = {}
-    
-    # A. Trend Score (max 30)
     score += min(trend_result["strength"], 30)
     filters["Trend"] = True
     reasons.append(f"15M trend: {trend} ({trend_result['phase']})")
-    
-    # B. Momentum Score (max 30)
     momentum_score = 0
     if momentum["ok"]:
         momentum_score += 10
@@ -623,23 +500,17 @@ def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
         momentum_score += 5
     if momentum["fib_zone"]:
         momentum_score += 5
-    
     score += min(momentum_score, 30)
     filters["Momentum"] = momentum["ok"]
     reasons.extend(momentum["reasons"])
-    
-    # C. Entry Score (max 30)
     entry_score = 0
     if entry["rsi_ok"]:
         entry_score += 15
     if entry["candle_ok"]:
         entry_score += 15
-    
     score += entry_score
     filters["Entry"] = entry["ok"]
     reasons.extend(entry["reasons"])
-    
-    # D. Risk Management (max 10)
     risk = calculate_risk_management(df1, trend, account_balance)
     if risk["risk_reward"] >= 2.0:
         score += 10
@@ -649,28 +520,18 @@ def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
         reasons.append(f"OK RR: {risk['risk_reward']:.2f}")
     else:
         reasons.append(f"Low RR: {risk['risk_reward']:.2f}")
-    
-    # =====================================================
-    # 6. FINAL DECISION
-    # =====================================================
-    
     price = safe_float(get_latest(df1).get("close"))
     rsi = safe_float(get_latest(df1).get("RSI"))
     atr = safe_float(get_latest(df1).get("ATR"))
-    
     hard_block = False
-    
     if trend_result["phase"] == "LATE" and not (momentum["pullback"] and momentum["reclaim"]):
         hard_block = True
         reasons.append("BLOCK: Late trend needs pullback + reclaim")
-    
     if trend_result["phase"] == "MATURE" and not momentum["pullback"]:
         hard_block = True
         reasons.append("BLOCK: Mature trend needs pullback")
-    
     signal = "NO SIGNAL"
     quality = "WEAK"
-    
     if score >= MIN_SCORE and not hard_block:
         signal = trend
         quality = "STRONG" if score >= STRONG_SCORE else "NORMAL"
@@ -678,11 +539,6 @@ def generate_hybrid_signal(df15, df5, df1, account_balance=10000):
         reasons.append("WAIT: Structure blocking entry")
     else:
         reasons.append(f"WAIT: Score {score} < {MIN_SCORE}")
-    
-        # =====================================================
-    # 7. RESULT
-    # =====================================================
-    
     return {
         "signal": signal,
         "stage": "ENTRY" if signal != "NO SIGNAL" else "WAIT",
@@ -719,11 +575,8 @@ def format_signal_for_telegram(signal_data):
 ⭐ Score: {signal_data.get('score', 0)}/100
 📝 {signal_data.get('reasons', [''])[0]}
 """
-    
     emoji = "🟢" if signal_data["signal"] == "BUY" else "🔴"
-    
     reasons_text = "\n".join([f"• {r}" for r in signal_data.get('reasons', [])[:5]])
-    
     return f"""
 {emoji} **GoldPro+ Hybrid V2 SIGNAL**
 ⏰ {signal_data.get('time', 'N/A')}
@@ -747,4 +600,3 @@ def format_signal_for_telegram(signal_data):
 
 #GoldProPlus #TradingSignal
 """
-```
