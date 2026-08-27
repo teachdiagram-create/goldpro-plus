@@ -1,19 +1,11 @@
 # hybrid_strategy.py
 # =========================================================
-# GoldPro+ Hybrid V2
-#
-# ترکیبی از سادگی GoldPro+ و دقت Scalper
-#
-# 15M -> TREND DIRECTION (جهت اصلی)
-# 5M  -> MOMENTUM & STRUCTURE (مومنتوم و ساختار)
-# 1M  -> ENTRY EXECUTION (نقطه ورود)
+# GoldPro+ Hybrid V2 - بدون وابستگی به ta
 # =========================================================
 
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from indicators import add_indicators
-
 
 # =========================================================
 # SETTINGS
@@ -48,7 +40,7 @@ TRAILING_STOP = 0.5
 
 
 # =========================================================
-# INDICATORS
+# INDICATORS (محاسبه دستی)
 # =========================================================
 
 def calculate_ema(series, period):
@@ -99,41 +91,27 @@ def get_previous(df):
 
 
 # =========================================================
-# DATA PREPARATION
+# DATA PREPARATION (بدون وابستگی به indicators.py)
 # =========================================================
 
 def prepare_data(df):
     if df is None or df.empty:
         return None
     df_copy = df.copy()
-    try:
-        df_result = add_indicators(df_copy)
-        required = ["EMA20", "EMA50", "RSI", "ATR"]
-        missing = [col for col in required if col not in df_result.columns]
-        if missing:
-            print(f"[Hybrid] Warning: Missing {missing}, calculating manually")
-            df_result = calculate_indicators_manually(df_copy)
-        return df_result
-    except Exception as e:
-        print(f"[Hybrid] Indicator error: {e}")
-        return calculate_indicators_manually(df_copy)
-
-
-def calculate_indicators_manually(df):
-    if df is None or df.empty:
-        return df
-    df["EMA9"] = calculate_ema(df["close"], EMA_FAST)
-    df["EMA20"] = calculate_ema(df["close"], EMA_SLOW)
-    df["EMA50"] = calculate_ema(df["close"], EMA_TREND)
-    df["RSI"] = calculate_rsi(df["close"])
+    # محاسبه اندیکاتورها به صورت دستی
+    df_copy["EMA9"] = calculate_ema(df_copy["close"], EMA_FAST)
+    df_copy["EMA20"] = calculate_ema(df_copy["close"], EMA_SLOW)
+    df_copy["EMA50"] = calculate_ema(df_copy["close"], EMA_TREND)
+    df_copy["RSI"] = calculate_rsi(df_copy["close"])
+    # ATR به صورت سری محاسبه می‌شود
     atr_values = []
-    for i in range(len(df)):
+    for i in range(len(df_copy)):
         if i < 14:
             atr_values.append(None)
         else:
-            atr_values.append(calculate_atr(df.iloc[:i+1]))
-    df["ATR"] = atr_values
-    return df
+            atr_values.append(calculate_atr(df_copy.iloc[:i+1]))
+    df_copy["ATR"] = atr_values
+    return df_copy
 
 
 # =========================================================
@@ -191,27 +169,26 @@ def analyze_trend_15m(df15):
         score += 20
     else:
         result["reasons"].append("RSI neutral")
-    if "EMA9" in df15.columns and "EMA20" in df15.columns:
-        spread = df15["EMA9"] - df15["EMA20"]
-        if result["trend"] == "BUY":
-            age = _bars_since_condition(spread > 0)
-        else:
-            age = _bars_since_condition(spread < 0)
-        result["age"] = age
-        if age is None:
-            result["phase"] = "UNKNOWN"
-        elif age <= 3:
-            result["phase"] = "EARLY"
-            score += 15
-        elif age <= 8:
-            result["phase"] = "DEVELOPING"
-            score += 10
-        elif age <= 15:
-            result["phase"] = "MATURE"
-        else:
-            result["phase"] = "LATE"
-            score -= 10
-            result["reasons"].append("Late trend, caution")
+    spread = df15["EMA9"] - df15["EMA20"]
+    if result["trend"] == "BUY":
+        age = _bars_since_condition(spread > 0)
+    else:
+        age = _bars_since_condition(spread < 0)
+    result["age"] = age
+    if age is None:
+        result["phase"] = "UNKNOWN"
+    elif age <= 3:
+        result["phase"] = "EARLY"
+        score += 15
+    elif age <= 8:
+        result["phase"] = "DEVELOPING"
+        score += 10
+    elif age <= 15:
+        result["phase"] = "MATURE"
+    else:
+        result["phase"] = "LATE"
+        score -= 10
+        result["reasons"].append("Late trend, caution")
     result["strength"] = score
     result["reasons"].append(f"15M Trend: {result['trend']} ({result['phase']})")
     return result
