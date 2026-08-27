@@ -7,37 +7,28 @@ import json
 import os
 from datetime import datetime
 
-# مسیر فایل ذخیره‌سازی (اختیاری، برای نگهداری بین اجراها)
 DATA_FILE = "last_check_data.json"
-
-# دیکشنری برای نگهداری در حافظه (برای اجرای فعلی)
 _last_signals = {}
 
 
 def save_last_check(symbol, signal_data):
-    """
-    ذخیره آخرین سیگنال برای یک نماد
-    """
+    """ذخیره آخرین سیگنال برای یک نماد"""
     global _last_signals
     _last_signals[symbol] = {
         "signal": signal_data.get("signal"),
         "timestamp": datetime.now().isoformat(),
         "data": signal_data
     }
-    # همچنین می‌توان در فایل ذخیره کرد
     try:
         with open(DATA_FILE, "w") as f:
             json.dump(_last_signals, f)
     except Exception:
-        pass  # در صورت عدم دسترسی به فایل، فقط در حافظه بماند
+        pass
 
 
 def get_last_check_time(symbol):
-    """
-    دریافت زمان آخرین بررسی برای یک نماد
-    """
+    """دریافت زمان آخرین بررسی برای یک نماد"""
     global _last_signals
-    # ابتدا از فایل بارگذاری کن (اگر وجود داشته باشد)
     try:
         if os.path.exists(DATA_FILE):
             with open(DATA_FILE, "r") as f:
@@ -45,16 +36,13 @@ def get_last_check_time(symbol):
                 _last_signals.update(data)
     except Exception:
         pass
-
     if symbol in _last_signals:
         return _last_signals[symbol].get("timestamp")
     return None
 
 
 def get_last_signal(symbol):
-    """
-    دریافت آخرین سیگنال ذخیره‌شده برای یک نماد
-    """
+    """دریافت آخرین سیگنال ذخیره‌شده برای یک نماد"""
     global _last_signals
     try:
         if os.path.exists(DATA_FILE):
@@ -63,16 +51,13 @@ def get_last_signal(symbol):
                 _last_signals.update(data)
     except Exception:
         pass
-
     if symbol in _last_signals:
         return _last_signals[symbol].get("data")
     return None
 
 
 def clear_last_check(symbol=None):
-    """
-    پاک کردن داده‌های ذخیره‌شده
-    """
+    """پاک کردن داده‌های ذخیره‌شده"""
     global _last_signals
     if symbol:
         _last_signals.pop(symbol, None)
