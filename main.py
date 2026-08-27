@@ -5,7 +5,7 @@ from datetime import datetime
 from data_feed import get_market_data
 from hybrid_strategy import generate_hybrid_signal, format_signal_for_telegram
 from telegram_bot import send_telegram_message
-from last_check import save_last_check, get_last_check_time
+from last_check import save_last_check, get_last_signal
 
 # تنظیمات
 SYMBOL = "XAU/USD"
@@ -50,7 +50,9 @@ def main():
             
             # ارسال به تلگرام
             if signal["signal"] != "NO SIGNAL":
-                if last_signal != signal["signal"]:
+                # بررسی سیگنال تکراری نباشد
+                prev_signal = get_last_signal(SYMBOL)
+                if prev_signal is None or prev_signal.get("signal") != signal["signal"]:
                     # سیگنال جدید
                     message = format_signal_for_telegram(signal)
                     send_telegram_message(message)
