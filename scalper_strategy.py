@@ -1372,4 +1372,4 @@ def generate_scalper_signal(df15, df5, df1):
         "reasons": reasons,
         "time": str(last1.get("time", "")),
     }
-
+```
