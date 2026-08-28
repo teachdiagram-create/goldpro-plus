@@ -19,18 +19,18 @@ CONFIG = {
     "DAYS_BACK": 3,
     
     "EARLY_ENTRY": True,
-    "BOS_LOOKBACK": 5,                 # کاهش به ۵ (حساس‌تر در بازار رنج)
-    "EARLY_SCORE_THRESHOLD": 55,
+    "BOS_LOOKBACK": 4,                 # کاهش به ۴ (حساس‌ترین حالت)
+    "EARLY_SCORE_THRESHOLD": 50,       # کاهش به ۵۰
     "NORMAL_SCORE_THRESHOLD": 70,
     
-    "RSI_OVERSOLD": 35,                # کاهش به ۳۵
+    "RSI_OVERSOLD": 45,                # افزایش به ۴۵
     "RSI_OVERBOUGHT": 55,              # کاهش به ۵۵
     
     "ADX_THRESHOLD": 20,
     "ADX_STRONG_THRESHOLD": 35,
     
     "FIB_LOOKBACK": 50,
-    "FIB_EARLY_ZONE": 65,              # افزایش به ۶۵ (پولبک‌های بیشتر پذیرفته شوند)
+    "FIB_EARLY_ZONE": 30,              # کاهش به ۳۰
     
     "SR_LOOKBACK": 20,
     "SR_ATR_DISTANCE": 1.0,
