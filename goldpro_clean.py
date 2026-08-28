@@ -1,5 +1,5 @@
 """
-GoldPro+ Clean Version - Early Entry Strategy با فیلتر ADX
+GoldPro+ Clean Version - Early Entry Strategy با جلوگیری از سیگنال تکراری
 """
 
 import requests
@@ -18,23 +18,44 @@ CONFIG = {
     "SYMBOL": "XAU/USD",
     "DAYS_BACK": 3,
     
+    # Early Entry
     "EARLY_ENTRY": True,
-    "BOS_LOOKBACK": 4,                 # کاهش به ۴ (حساس‌ترین حالت)
-    "EARLY_SCORE_THRESHOLD": 50,       # کاهش به ۵۰
+    "BOS_LOOKBACK": 5,
+    "EARLY_SCORE_THRESHOLD": 50,
     "NORMAL_SCORE_THRESHOLD": 70,
     
-    "RSI_OVERSOLD": 45,                # افزایش به ۴۵
-    "RSI_OVERBOUGHT": 55,              # کاهش به ۵۵
+    # RSI
+    "RSI_OVERSOLD": 45,
+    "RSI_OVERBOUGHT": 55,
     
+    # ADX
     "ADX_THRESHOLD": 20,
     "ADX_STRONG_THRESHOLD": 35,
     
+    # فیبوناچی
     "FIB_LOOKBACK": 50,
-    "FIB_EARLY_ZONE": 30,              # کاهش به ۳۰
+    "FIB_EARLY_ZONE": 30,
     
+    # پشتیبانی/مقاومت
     "SR_LOOKBACK": 20,
     "SR_ATR_DISTANCE": 1.0,
+    
+    # ===== جلوگیری از تکرار =====
+    "MIN_PRICE_CHANGE_ATR": 0.8,      # حداقل ۰.۸ برابر ATR (حدود ۲ دلار)
+    "COOLDOWN_MINUTES": 5,            # هر ۵ دقیقه فقط یک بار سیگنال
 }
+
+# =========================================================
+# 📌 وضعیت آخرین سیگنال (برای جلوگیری از تکرار)
+# =========================================================
+
+_last_signal_state = {
+    "direction": None,   # "BUY" یا "SELL"
+    "price": 0.0,
+    "time": None,
+    "score": 0
+}
+
 # =========================================================
 # 📥 دریافت داده
 # =========================================================
@@ -275,11 +296,45 @@ def near_resistance(df):
     return (distance <= max_dist, resistance)
 
 # =========================================================
+# 🔄 بررسی سیگنال تکراری
+# =========================================================
+
+def is_duplicate_signal(signal_direction, price, atr):
+    """بررسی اینکه آیا سیگنال جدید تکراری است یا خیر"""
+    global _last_signal_state
+    
+    # اگر سیگنال هم‌جهت با قبلی است
+    if _last_signal_state["direction"] == signal_direction:
+        # فاصله قیمتی
+        min_move = CONFIG["MIN_PRICE_CHANGE_ATR"] * atr
+        price_diff = abs(price - _last_signal_state["price"])
+        
+        # اگر فاصله قیمتی کم است، سیگنال تکراری محسوب می‌شود
+        if price_diff < min_move:
+            return True, f"Price moved only {price_diff:.2f} < {min_move:.2f}"
+        
+        # بررسی کولدان زمانی
+        if _last_signal_state["time"] is not None:
+            time_diff = (datetime.now() - _last_signal_state["time"]).total_seconds() / 60
+            if time_diff < CONFIG["COOLDOWN_MINUTES"]:
+                return True, f"Cooldown active ({time_diff:.1f}/{CONFIG['COOLDOWN_MINUTES']} min)"
+    
+    return False, None
+
+def update_last_signal(direction, price, score):
+    """به‌روزرسانی وضعیت آخرین سیگنال"""
+    global _last_signal_state
+    _last_signal_state["direction"] = direction
+    _last_signal_state["price"] = price
+    _last_signal_state["time"] = datetime.now()
+    _last_signal_state["score"] = score
+
+# =========================================================
 # 🧠 استراتژی اصلی
 # =========================================================
 
 def analyze_signal(df5, df1):
-    """تحلیل ترکیبی با فیلتر ADX"""
+    """تحلیل ترکیبی با فیلتر ADX و جلوگیری از تکرار"""
     
     df5 = add_indicators(df5)
     df1 = add_indicators(df1)
@@ -433,22 +488,66 @@ def analyze_signal(df5, df1):
             score_sell += 5
             reasons_sell.append(f"🔥 ADX strong (+5)")
     
-    # ========== 10. تصمیم‌گیری نهایی (بدون نیاز به BOS) ==========
+    # ========== 10. تصمیم‌گیری نهایی با جلوگیری از تکرار ==========
     threshold_early = CONFIG["EARLY_SCORE_THRESHOLD"]
     threshold_normal = CONFIG["NORMAL_SCORE_THRESHOLD"]
     
     # فروش
     if CONFIG["EARLY_ENTRY"] and score_sell >= threshold_early:
+        is_dup, reason = is_duplicate_signal("SELL", price, atr1)
+        if is_dup:
+            return {
+                "signal": "NO SIGNAL",
+                "score": score_sell,
+                "quality": "WEAK",
+                "price": price,
+                "trend": trend,
+                "reasons": [f"⚠️ DUPLICATE: {reason}"]
+            }
+        update_last_signal("SELL", price, score_sell)
         return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "EARLY")
     
     if score_sell >= threshold_normal:
+        is_dup, reason = is_duplicate_signal("SELL", price, atr1)
+        if is_dup:
+            return {
+                "signal": "NO SIGNAL",
+                "score": score_sell,
+                "quality": "WEAK",
+                "price": price,
+                "trend": trend,
+                "reasons": [f"⚠️ DUPLICATE: {reason}"]
+            }
+        update_last_signal("SELL", price, score_sell)
         return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "NORMAL")
     
     # خرید
     if CONFIG["EARLY_ENTRY"] and score_buy >= threshold_early:
+        is_dup, reason = is_duplicate_signal("BUY", price, atr1)
+        if is_dup:
+            return {
+                "signal": "NO SIGNAL",
+                "score": score_buy,
+                "quality": "WEAK",
+                "price": price,
+                "trend": trend,
+                "reasons": [f"⚠️ DUPLICATE: {reason}"]
+            }
+        update_last_signal("BUY", price, score_buy)
         return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "EARLY")
     
     if score_buy >= threshold_normal:
+        is_dup, reason = is_duplicate_signal("BUY", price, atr1)
+        if is_dup:
+            return {
+                "signal": "NO SIGNAL",
+                "score": score_buy,
+                "quality": "WEAK",
+                "price": price,
+                "trend": trend,
+                "reasons": [f"⚠️ DUPLICATE: {reason}"]
+            }
+        update_last_signal("BUY", price, score_buy)
         return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "NORMAL")
     
     # بدون سیگنال
@@ -486,7 +585,7 @@ def create_result(signal, score, reasons, price, rsi, adx, trend, entry_type):
 
 def main():
     print("=" * 60)
-    print("🧪 GOLDPRO+ CLEAN (نسخه نهایی)")
+    print("🧪 GOLDPRO+ CLEAN (نسخه نهایی - بدون سیگنال تکراری)")
     print("=" * 60)
     
     df5 = fetch_data("5min")
@@ -518,10 +617,6 @@ def main():
             print(f"  • {r}")
     else:
         print("⚠️ هیچ سیگنالی یافت نشد.")
-        print(f"   امتیاز: {result.get('score', 0)}")
-        print(f"   ADX: {result.get('adx', 0):.1f}")
-    
-    print("=" * 60)
-
-if __name__ == "__main__":
-    main()
+        if result.get('reasons'):
+            print(f"   دلیل: {result['reasons']}")
+        print(f"   ام
