@@ -21,10 +21,10 @@ CONFIG = {
     "DAYS_BACK": 3,
     
     # تنظیمات Early Entry
-    "EARLY_ENTRY": True,           # فعال‌سازی ورود زودهنگام
-    "BOS_LOOKBACK": 8,             # تعداد کندل برای شکست ساختار
-    "EARLY_SCORE_THRESHOLD": 60,   # آستانه امتیاز برای Early Entry (کمتر از معمول)
-    "NORMAL_SCORE_THRESHOLD": 70,  # آستانه امتیاز معمولی
+    "EARLY_ENTRY": True,
+    "BOS_LOOKBACK": 8,
+    "EARLY_SCORE_THRESHOLD": 60,
+    "NORMAL_SCORE_THRESHOLD": 70,
     
     # آستانه‌های RSI
     "RSI_OVERSOLD": 30,
@@ -32,7 +32,7 @@ CONFIG = {
     
     # فیبوناچی
     "FIB_LOOKBACK": 50,
-    "FIB_EARLY_ZONE": 38.2,        # حداکثر پولبک برای ورود زودهنگام
+    "FIB_EARLY_ZONE": 38.2,
     
     # پشتیبانی/مقاومت
     "SR_LOOKBACK": 20,
@@ -40,7 +40,7 @@ CONFIG = {
 }
 
 # =========================================================
-# 📥 دریافت داده (با کش)
+# 📥 دریافت داده (با کش و مدیریت خطا)
 # =========================================================
 
 _cache = {}
@@ -62,38 +62,65 @@ def fetch_data(interval, days=None):
         "start_date": (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     }
     
-    try:
-        resp = requests.get(url, params=params, timeout=15)
-        if resp.status_code != 200:
-            print(f"⚠️ HTTP {resp.status_code} برای {interval}")
-            return None
-        
-        data = resp.json()
-        if 'values' not in data or len(data['values']) < 50:
-            print(f"⚠️ داده کافی نیست برای {interval}")
-            return None
-        
-        df = pd.DataFrame(data['values'])
-        df = df.rename(columns={
-            'datetime': 'timestamp',
-            'open': 'open',
-            'high': 'high',
-            'low': 'low',
-            'close': 'close',
-            'volume': 'volume'
-        })
-        for col in ['open', 'high', 'low', 'close', 'volume']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df = df.sort_values('timestamp').set_index('timestamp')
-        df = df.astype(float)
-        
-        _cache[cache_key] = df
-        return df
-        
-    except Exception as e:
-        print(f"❌ خطا در دریافت {interval}: {e}")
-        return None
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            
+            if resp.status_code == 429:
+                wait = (attempt + 1) * 10
+                print(f"⚠️ HTTP 429 (Too Many Requests). Waiting {wait}s...")
+                time.sleep(wait)
+                continue
+                
+            if resp.status_code != 200:
+                print(f"⚠️ HTTP {resp.status_code} برای {interval}")
+                return None
+            
+            data = resp.json()
+            if 'values' not in data or len(data['values']) < 50:
+                print(f"⚠️ داده کافی نیست برای {interval}")
+                return None
+            
+            df = pd.DataFrame(data['values'])
+            
+            # بررسی وجود ستون‌های اصلی
+            required_cols = ['datetime', 'open', 'high', 'low', 'close']
+            for col in required_cols:
+                if col not in df.columns:
+                    print(f"⚠️ ستون {col} در پاسخ وجود ندارد")
+                    return None
+            
+            # اگر volume نبود، اضافه کن
+            if 'volume' not in df.columns:
+                df['volume'] = 0
+                
+            df = df.rename(columns={
+                'datetime': 'timestamp',
+                'open': 'open',
+                'high': 'high',
+                'low': 'low',
+                'close': 'close',
+                'volume': 'volume'
+            })
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            df = df.sort_values('timestamp').set_index('timestamp')
+            df = df.astype(float)
+            
+            _cache[cache_key] = df
+            return df
+            
+        except Exception as e:
+            print(f"❌ خطا در دریافت {interval}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5)
+            else:
+                return None
+    return None
 
 # =========================================================
 # 📊 محاسبه اندیکاتورها
@@ -163,18 +190,15 @@ def detect_rsi_divergence(df, lookback=30):
     rsi = calculate_rsi(df['close'], 14)
     price = df['close']
     
-    # پیدا کردن قله‌های قیمت
     last_peak_idx = price.iloc[-lookback:].idxmax()
     prev_peak_idx = price.iloc[-lookback*2:-lookback].idxmax() if len(df) > lookback*2 else None
     
     if prev_peak_idx is None:
         return None
     
-    # واگرایی منفی (قیمت بالا رفته ولی RSI پایین آمده)
     if price.loc[last_peak_idx] > price.loc[prev_peak_idx]:
         if rsi.loc[last_peak_idx] < rsi.loc[prev_peak_idx]:
             return "BEARISH"
-    # واگرایی مثبت
     elif price.loc[last_peak_idx] < price.loc[prev_peak_idx]:
         if rsi.loc[last_peak_idx] > rsi.loc[prev_peak_idx]:
             return "BULLISH"
@@ -445,7 +469,7 @@ def create_result(signal, score, reasons, price, rsi, atr, trend, entry_type):
     }
 
 # =========================================================
-# 🚀 اجرای اصلی
+# 🚀 اجرای اصلی (برای تست مستقل)
 # =========================================================
 
 def main():
@@ -453,7 +477,6 @@ def main():
     print("🧪 GOLDPRO+ CLEAN (EARLY ENTRY ENABLED)")
     print("=" * 60)
     
-    # دریافت داده
     print("📥 دریافت داده 5M...")
     df5 = fetch_data("5min")
     print("📥 دریافت داده 1M...")
@@ -466,10 +489,8 @@ def main():
     print(f"📊 5M: {len(df5)} کندل")
     print(f"📊 1M: {len(df1)} کندل")
     
-    # تحلیل
     result = analyze_signal(df5, df1)
     
-    # نمایش نتیجه
     print("\n" + "=" * 60)
     print("📊 گزارش نهایی")
     print("=" * 60)
