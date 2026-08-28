@@ -5,7 +5,6 @@ import os
 # تنظیمات تلگرام
 # =========================================================
 
-# ✅ اصلاح: توکن و چت‌آیدی مستقیماً یا از متغیر محیطی
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8976953594:AAEY4NAFO1I2ps8KkLPDft2PCl0B2xoZ5qU')
 TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '100881313')
 
@@ -14,9 +13,6 @@ TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '100881313')
 # =========================================================
 
 def send_signal(signal_data, strategy_name="GOLDPRO+"):
-    """
-    ارسال سیگنال به تلگرام با نام استراتژی
-    """
     if signal_data is None:
         return
 
@@ -24,19 +20,21 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
         print(f"⏳ {strategy_name}: No signal to send")
         return
 
-    # ایموجی based on signal type
-    if signal_data['signal'] == "SELL":
-        emoji = "🔴"
-    elif signal_data['signal'] == "BUY":
-        emoji = "🟢"
-    else:
-        emoji = "⚪"
+    emoji = "🔴" if signal_data['signal'] == "SELL" else "🟢"
 
-    # ساخت پیام
     message = f"""{emoji} <b>{strategy_name}</b> {signal_data['signal']} SIGNAL
 
 💰 Symbol: XAU/USD
-💵 Entry: {signal_data.get('price', 0):.5f}
+💵 Entry: {signal_data.get('price', 0):.5f}"""
+
+    if signal_data.get('sl') is not None:
+        message += f"""
+🛑 Stop Loss: {signal_data['sl']:.2f}
+🎯 TP1: {signal_data['tp1']:.2f}
+🎯 TP2: {signal_data['tp2']:.2f}
+📊 Risk/Reward: ~1:2"""
+
+    message += f"""
 
 ⭐ Score: {signal_data.get('score', 0)}/100
 🏷️ Quality: {signal_data.get('quality', 'WEAK')}
@@ -47,7 +45,6 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
 
 📋 Details:
 """
-    # اضافه کردن دلایل (حداکثر ۵ مورد)
     reasons = signal_data.get('reasons', [])
     if isinstance(reasons, list):
         for r in reasons[:5]:
@@ -55,11 +52,9 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
     else:
         message += f"  • {reasons}\n"
 
-    # اضافه کردن زمان
     if signal_data.get('time'):
         message += f"\n⏰ {signal_data.get('time')}"
 
-    # ارسال به تلگرام
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -77,20 +72,22 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
         print(f"❌ خطا در ارسال {strategy_name}: {e}")
 
 # =========================================================
-# تابع تست (برای بررسی سریع)
+# تست سریع
 # =========================================================
 
 if __name__ == "__main__":
-    # تست ارسال پیام
     test_signal = {
-        "signal": "BUY",
-        "price": 4600.00,
-        "score": 80,
-        "quality": "STRONG",
-        "trend": "BUY",
-        "trend_phase": "MATURE",
+        "signal": "SELL",
+        "price": 4620.50,
+        "sl": 4632.00,
+        "tp1": 4608.00,
+        "tp2": 4596.00,
+        "score": 65,
+        "quality": "NORMAL",
+        "trend": "SELL",
+        "trend_phase": "EARLY",
         "reversal_state": "CONFIRMED",
-        "reasons": ["Test reason 1", "Test reason 2"],
+        "reasons": ["OK: 5M downtrend (+30)", "OK: strong bearish candle (+20)", "OK: ADX 32.4 (+10)"],
         "time": "2026-08-28 16:30:00"
     }
-    send_signal(test_signal, strategy_name="TEST")
+    send_signal(test_signal, strategy_name="GOLDPRO+ (CLEAN)")
