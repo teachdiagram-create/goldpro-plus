@@ -1,5 +1,5 @@
 """
-GoldPro+ Clean Version - Early Entry Strategy با جلوگیری از سیگنال تکراری
+GoldPro+ Clean Version - Early Entry Strategy با SL/TP و جلوگیری از تکرار
 """
 
 import requests
@@ -18,39 +18,38 @@ CONFIG = {
     "SYMBOL": "XAU/USD",
     "DAYS_BACK": 3,
     
-    # Early Entry
     "EARLY_ENTRY": True,
     "BOS_LOOKBACK": 5,
     "EARLY_SCORE_THRESHOLD": 50,
     "NORMAL_SCORE_THRESHOLD": 70,
     
-    # RSI
     "RSI_OVERSOLD": 45,
     "RSI_OVERBOUGHT": 55,
     
-    # ADX
     "ADX_THRESHOLD": 20,
     "ADX_STRONG_THRESHOLD": 35,
     
-    # فیبوناچی
     "FIB_LOOKBACK": 50,
     "FIB_EARLY_ZONE": 30,
     
-    # پشتیبانی/مقاومت
     "SR_LOOKBACK": 20,
     "SR_ATR_DISTANCE": 1.0,
     
-    # ===== جلوگیری از تکرار =====
-    "MIN_PRICE_CHANGE_ATR": 0.8,      # حداقل ۰.۸ برابر ATR (حدود ۲ دلار)
-    "COOLDOWN_MINUTES": 5,            # هر ۵ دقیقه فقط یک بار سیگنال
+    "MIN_PRICE_CHANGE_ATR": 0.8,
+    "COOLDOWN_MINUTES": 5,
+    
+    "DEFAULT_RR_RATIO": 2.0,
+    "SL_ATR_MULTIPLIER": 1.5,
+    "TP1_ATR_MULTIPLIER": 1.0,
+    "TP2_ATR_MULTIPLIER": 2.0,
 }
 
 # =========================================================
-# 📌 وضعیت آخرین سیگنال (برای جلوگیری از تکرار)
+# 📌 وضعیت آخرین سیگنال
 # =========================================================
 
 _last_signal_state = {
-    "direction": None,   # "BUY" یا "SELL"
+    "direction": None,
     "price": 0.0,
     "time": None,
     "score": 0
@@ -296,24 +295,56 @@ def near_resistance(df):
     return (distance <= max_dist, resistance)
 
 # =========================================================
-# 🔄 بررسی سیگنال تکراری
+# 🔄 محاسبه SL/TP
+# =========================================================
+
+def calculate_sl_tp(signal, price, atr, support=None, resistance=None):
+    sl_mult = CONFIG["SL_ATR_MULTIPLIER"]
+    tp1_mult = CONFIG["TP1_ATR_MULTIPLIER"]
+    tp2_mult = CONFIG["TP2_ATR_MULTIPLIER"]
+    
+    if signal == "SELL":
+        if resistance is not None:
+            sl = resistance + atr * 0.3
+        else:
+            sl = price + atr * sl_mult
+        
+        tp1 = price - atr * tp1_mult
+        tp2 = price - atr * tp2_mult
+        
+        if tp2 > tp1:
+            tp2 = tp1 - atr * 0.5
+            
+    elif signal == "BUY":
+        if support is not None:
+            sl = support - atr * 0.3
+        else:
+            sl = price - atr * sl_mult
+        
+        tp1 = price + atr * tp1_mult
+        tp2 = price + atr * tp2_mult
+        
+        if tp2 < tp1:
+            tp2 = tp1 + atr * 0.5
+    else:
+        return None, None, None
+    
+    return round(sl, 2), round(tp1, 2), round(tp2, 2)
+
+# =========================================================
+# 🔄 جلوگیری از سیگنال تکراری
 # =========================================================
 
 def is_duplicate_signal(signal_direction, price, atr):
-    """بررسی اینکه آیا سیگنال جدید تکراری است یا خیر"""
     global _last_signal_state
     
-    # اگر سیگنال هم‌جهت با قبلی است
     if _last_signal_state["direction"] == signal_direction:
-        # فاصله قیمتی
         min_move = CONFIG["MIN_PRICE_CHANGE_ATR"] * atr
         price_diff = abs(price - _last_signal_state["price"])
         
-        # اگر فاصله قیمتی کم است، سیگنال تکراری محسوب می‌شود
         if price_diff < min_move:
             return True, f"Price moved only {price_diff:.2f} < {min_move:.2f}"
         
-        # بررسی کولدان زمانی
         if _last_signal_state["time"] is not None:
             time_diff = (datetime.now() - _last_signal_state["time"]).total_seconds() / 60
             if time_diff < CONFIG["COOLDOWN_MINUTES"]:
@@ -322,7 +353,6 @@ def is_duplicate_signal(signal_direction, price, atr):
     return False, None
 
 def update_last_signal(direction, price, score):
-    """به‌روزرسانی وضعیت آخرین سیگنال"""
     global _last_signal_state
     _last_signal_state["direction"] = direction
     _last_signal_state["price"] = price
@@ -334,15 +364,12 @@ def update_last_signal(direction, price, score):
 # =========================================================
 
 def analyze_signal(df5, df1):
-    """تحلیل ترکیبی با فیلتر ADX و جلوگیری از تکرار"""
-    
     df5 = add_indicators(df5)
     df1 = add_indicators(df1)
     
     if df5 is None or df1 is None or len(df5) < 30 or len(df1) < 30:
         return {"signal": "NO SIGNAL", "reasons": ["داده کافی نیست"]}
     
-    # ========== استخراج داده‌ها ==========
     last5 = df5.iloc[-1]
     last1 = df1.iloc[-1]
     
@@ -354,7 +381,6 @@ def analyze_signal(df5, df1):
     ema20_5 = float(last5['EMA20'])
     ema50_5 = float(last5['EMA50'])
     
-    # ========== 1. روند ==========
     if ema20_5 > ema50_5:
         trend = "BUY"
     elif ema20_5 < ema50_5:
@@ -362,16 +388,10 @@ def analyze_signal(df5, df1):
     else:
         trend = "NONE"
     
-    # ========== 2. BOS ==========
     bos_signal, bos_level = detect_bos(df5)
-    
-    # ========== 3. واگرایی ==========
     divergence = detect_rsi_divergence(df5)
-    
-    # ========== 4. فیبوناچی ==========
     fib_pullback, _, _ = calc_fib_pullback(df5)
     
-    # ========== 5. RSI Reversal ==========
     if len(df1) >= 3:
         rsi_prev = float(df1.iloc[-2]['RSI'])
         rsi_before = float(df1.iloc[-3]['RSI'])
@@ -391,16 +411,14 @@ def analyze_signal(df5, df1):
         rsi_buy_trigger = False
         rsi_sell_trigger = False
     
-    # ========== 6. کندل 1M ==========
     candle_bull = last1['close'] > last1['open']
     candle_bear = last1['close'] < last1['open']
     candle_strong = abs(last1['close'] - last1['open']) > atr1 * 0.3
     
-    # ========== 7. پشتیبانی/مقاومت ==========
     near_sup, support = near_support(df1)
     near_res, resistance = near_resistance(df1)
     
-    # ========== 8. تحلیل خرید ==========
+    # ========== تحلیل خرید ==========
     score_buy = 0
     reasons_buy = []
     
@@ -444,7 +462,7 @@ def analyze_signal(df5, df1):
             score_buy += 5
             reasons_buy.append(f"🔥 ADX strong (+5)")
     
-    # ========== 9. تحلیل فروش ==========
+    # ========== تحلیل فروش ==========
     score_sell = 0
     reasons_sell = []
     
@@ -488,67 +506,45 @@ def analyze_signal(df5, df1):
             score_sell += 5
             reasons_sell.append(f"🔥 ADX strong (+5)")
     
-    # ========== 10. تصمیم‌گیری نهایی با جلوگیری از تکرار ==========
+    # ========== تصمیم‌گیری نهایی ==========
     threshold_early = CONFIG["EARLY_SCORE_THRESHOLD"]
     threshold_normal = CONFIG["NORMAL_SCORE_THRESHOLD"]
     
-    # فروش
+    # فروش Early
     if CONFIG["EARLY_ENTRY"] and score_sell >= threshold_early:
         is_dup, reason = is_duplicate_signal("SELL", price, atr1)
         if is_dup:
-            return {
-                "signal": "NO SIGNAL",
-                "score": score_sell,
-                "quality": "WEAK",
-                "price": price,
-                "trend": trend,
-                "reasons": [f"⚠️ DUPLICATE: {reason}"]
-            }
+            return {"signal": "NO SIGNAL", "score": score_sell, "quality": "WEAK", "price": price, "trend": trend, "reasons": [f"⚠️ DUPLICATE: {reason}"]}
         update_last_signal("SELL", price, score_sell)
-        return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "EARLY")
+        sl, tp1, tp2 = calculate_sl_tp("SELL", price, atr1, resistance=resistance if near_res else None)
+        return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "EARLY", sl, tp1, tp2)
     
+    # فروش Normal
     if score_sell >= threshold_normal:
         is_dup, reason = is_duplicate_signal("SELL", price, atr1)
         if is_dup:
-            return {
-                "signal": "NO SIGNAL",
-                "score": score_sell,
-                "quality": "WEAK",
-                "price": price,
-                "trend": trend,
-                "reasons": [f"⚠️ DUPLICATE: {reason}"]
-            }
+            return {"signal": "NO SIGNAL", "score": score_sell, "quality": "WEAK", "price": price, "trend": trend, "reasons": [f"⚠️ DUPLICATE: {reason}"]}
         update_last_signal("SELL", price, score_sell)
-        return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "NORMAL")
+        sl, tp1, tp2 = calculate_sl_tp("SELL", price, atr1, resistance=resistance if near_res else None)
+        return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "NORMAL", sl, tp1, tp2)
     
-    # خرید
+    # خرید Early
     if CONFIG["EARLY_ENTRY"] and score_buy >= threshold_early:
         is_dup, reason = is_duplicate_signal("BUY", price, atr1)
         if is_dup:
-            return {
-                "signal": "NO SIGNAL",
-                "score": score_buy,
-                "quality": "WEAK",
-                "price": price,
-                "trend": trend,
-                "reasons": [f"⚠️ DUPLICATE: {reason}"]
-            }
+            return {"signal": "NO SIGNAL", "score": score_buy, "quality": "WEAK", "price": price, "trend": trend, "reasons": [f"⚠️ DUPLICATE: {reason}"]}
         update_last_signal("BUY", price, score_buy)
-        return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "EARLY")
+        sl, tp1, tp2 = calculate_sl_tp("BUY", price, atr1, support=support if near_sup else None)
+        return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "EARLY", sl, tp1, tp2)
     
+    # خرید Normal
     if score_buy >= threshold_normal:
         is_dup, reason = is_duplicate_signal("BUY", price, atr1)
         if is_dup:
-            return {
-                "signal": "NO SIGNAL",
-                "score": score_buy,
-                "quality": "WEAK",
-                "price": price,
-                "trend": trend,
-                "reasons": [f"⚠️ DUPLICATE: {reason}"]
-            }
+            return {"signal": "NO SIGNAL", "score": score_buy, "quality": "WEAK", "price": price, "trend": trend, "reasons": [f"⚠️ DUPLICATE: {reason}"]}
         update_last_signal("BUY", price, score_buy)
-        return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "NORMAL")
+        sl, tp1, tp2 = calculate_sl_tp("BUY", price, atr1, support=support if near_sup else None)
+        return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "NORMAL", sl, tp1, tp2)
     
     # بدون سیگنال
     return {
@@ -565,9 +561,9 @@ def analyze_signal(df5, df1):
         "reasons": ["شرایط برقرار نیست"]
     }
 
-def create_result(signal, score, reasons, price, rsi, adx, trend, entry_type):
+def create_result(signal, score, reasons, price, rsi, adx, trend, entry_type, sl=None, tp1=None, tp2=None):
     quality = "STRONG" if score >= 85 else "NORMAL" if score >= 70 else "WEAK"
-    return {
+    result = {
         "signal": signal,
         "score": min(score, 100),
         "quality": quality,
@@ -578,14 +574,19 @@ def create_result(signal, score, reasons, price, rsi, adx, trend, entry_type):
         "entry_type": entry_type,
         "reasons": [f"Score: {score}/100"] + reasons + [f"FINAL {signal} SIGNAL ({entry_type})"]
     }
+    if sl is not None:
+        result["sl"] = sl
+        result["tp1"] = tp1
+        result["tp2"] = tp2
+    return result
 
 # =========================================================
-# 🚀 اجرا (برای تست مستقل)
+# 🚀 اجرای مستقل (برای تست)
 # =========================================================
 
 def main():
     print("=" * 60)
-    print("🧪 GOLDPRO+ CLEAN (نسخه نهایی - بدون سیگنال تکراری)")
+    print("🧪 GOLDPRO+ CLEAN (نسخه نهایی با SL/TP)")
     print("=" * 60)
     
     df5 = fetch_data("5min")
@@ -605,6 +606,10 @@ def main():
         emoji = "🔴" if result['signal'] == "SELL" else "🟢"
         print(f"{emoji} {CONFIG['SYMBOL']} {result['signal']} ({result.get('entry_type', 'NORMAL')})")
         print(f"💰 قیمت: {result['price']:.5f}")
+        if result.get('sl') is not None:
+            print(f"🛑 SL: {result['sl']:.2f}")
+            print(f"🎯 TP1: {result['tp1']:.2f}")
+            print(f"🎯 TP2: {result['tp2']:.2f}")
         print(f"⭐ امتیاز: {result['score']}/100")
         print(f"🏷️ کیفیت: {result['quality']}")
         print(f"📈 روند: {result.get('trend', 'NONE')}")
@@ -619,4 +624,109 @@ def main():
         print("⚠️ هیچ سیگنالی یافت نشد.")
         if result.get('reasons'):
             print(f"   دلیل: {result['reasons']}")
-        print(f"   ام
+        print(f"   امتیاز: {result.get('score', 0)}")
+    
+    print("=" * 60)
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+📁 فایل telegram_bot.py (کامل)
+
+```python
+import requests
+import os
+
+# =========================================================
+# تنظیمات تلگرام
+# =========================================================
+
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8976953594:AAEY4NAFO1I2ps8KkLPDft2PCl0B2xoZ5qU')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '100881313')
+
+# =========================================================
+# ارسال پیام به تلگرام
+# =========================================================
+
+def send_signal(signal_data, strategy_name="GOLDPRO+"):
+    if signal_data is None:
+        return
+
+    if signal_data.get('signal') == "NO SIGNAL":
+        print(f"⏳ {strategy_name}: No signal to send")
+        return
+
+    emoji = "🔴" if signal_data['signal'] == "SELL" else "🟢"
+
+    message = f"""{emoji} <b>{strategy_name}</b> {signal_data['signal']} SIGNAL
+
+💰 Symbol: XAU/USD
+💵 Entry: {signal_data.get('price', 0):.5f}"""
+
+    if signal_data.get('sl') is not None:
+        message += f"""
+🛑 Stop Loss: {signal_data['sl']:.2f}
+🎯 TP1: {signal_data['tp1']:.2f}
+🎯 TP2: {signal_data['tp2']:.2f}
+📊 Risk/Reward: ~1:2"""
+
+    message += f"""
+
+⭐ Score: {signal_data.get('score', 0)}/100
+🏷️ Quality: {signal_data.get('quality', 'WEAK')}
+
+📈 Trend: {signal_data.get('trend', 'NONE')}
+🧭 Phase: {signal_data.get('trend_phase', signal_data.get('phase', 'UNKNOWN'))}
+🔄 Reversal: {signal_data.get('reversal_state', signal_data.get('stage', 'NONE'))}
+
+📋 Details:
+"""
+    reasons = signal_data.get('reasons', [])
+    if isinstance(reasons, list):
+        for r in reasons[:5]:
+            message += f"  • {r}\n"
+    else:
+        message += f"  • {reasons}\n"
+
+    if signal_data.get('time'):
+        message += f"\n⏰ {signal_data.get('time')}"
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            print(f"✅ پیام {strategy_name} ارسال شد")
+        else:
+            print(f"❌ خطا در ارسال {strategy_name}: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"❌ خطا در ارسال {strategy_name}: {e}")
+
+# =========================================================
+# تست سریع
+# =========================================================
+
+if __name__ == "__main__":
+    test_signal = {
+        "signal": "SELL",
+        "price": 4620.50,
+        "sl": 4632.00,
+        "tp1": 4608.00,
+        "tp2": 4596.00,
+        "score": 65,
+        "quality": "NORMAL",
+        "trend": "SELL",
+        "trend_phase": "EARLY",
+        "reversal_state": "CONFIRMED",
+        "reasons": ["OK: 5M downtrend (+30)", "OK: strong bearish candle (+20)", "OK: ADX 32.4 (+10)"],
+        "time": "2026-08-28 16:30:00"
+    }
+    send_signal(test_signal, strategy_name="GOLDPRO+ (CLEAN)")
