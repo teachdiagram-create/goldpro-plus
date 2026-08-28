@@ -1,6 +1,5 @@
 """
-GoldPro+ Clean Version - Early Entry Strategy
-Only depends on: pandas, numpy, requests
+GoldPro+ Clean Version - Early Entry Strategy با فیلتر قدرت روند (ADX)
 """
 
 import requests
@@ -9,10 +8,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import os
 import time
-import json
 
 # =========================================================
-# 📌 تنظیمات (اینجا تغییر دهید)
+# 📌 تنظیمات
 # =========================================================
 
 CONFIG = {
@@ -20,15 +18,19 @@ CONFIG = {
     "SYMBOL": "XAU/USD",
     "DAYS_BACK": 3,
     
-    # تنظیمات Early Entry
+    # Early Entry
     "EARLY_ENTRY": True,
     "BOS_LOOKBACK": 8,
     "EARLY_SCORE_THRESHOLD": 60,
     "NORMAL_SCORE_THRESHOLD": 70,
     
-    # آستانه‌های RSI
-    "RSI_OVERSOLD": 30,
-    "RSI_OVERBOUGHT": 70,
+    # RSI
+    "RSI_OVERSOLD": 35,
+    "RSI_OVERBOUGHT": 65,
+    
+    # ADX (قدرت روند)
+    "ADX_THRESHOLD": 25,
+    "ADX_STRONG_THRESHOLD": 40,
     
     # فیبوناچی
     "FIB_LOOKBACK": 50,
@@ -40,7 +42,7 @@ CONFIG = {
 }
 
 # =========================================================
-# 📥 دریافت داده (با کش و مدیریت خطا)
+# 📥 دریافت داده
 # =========================================================
 
 _cache = {}
@@ -69,29 +71,27 @@ def fetch_data(interval, days=None):
             
             if resp.status_code == 429:
                 wait = (attempt + 1) * 10
-                print(f"⚠️ HTTP 429 (Too Many Requests). Waiting {wait}s...")
+                print(f"⚠️ HTTP 429. Waiting {wait}s...")
                 time.sleep(wait)
                 continue
                 
             if resp.status_code != 200:
-                print(f"⚠️ HTTP {resp.status_code} برای {interval}")
+                print(f"⚠️ HTTP {resp.status_code}")
                 return None
             
             data = resp.json()
             if 'values' not in data or len(data['values']) < 50:
-                print(f"⚠️ داده کافی نیست برای {interval}")
+                print(f"⚠️ داده کافی نیست")
                 return None
             
             df = pd.DataFrame(data['values'])
             
-            # بررسی وجود ستون‌های اصلی
             required_cols = ['datetime', 'open', 'high', 'low', 'close']
             for col in required_cols:
                 if col not in df.columns:
-                    print(f"⚠️ ستون {col} در پاسخ وجود ندارد")
+                    print(f"⚠️ ستون {col} وجود ندارد")
                     return None
             
-            # اگر volume نبود، اضافه کن
             if 'volume' not in df.columns:
                 df['volume'] = 0
                 
@@ -115,7 +115,7 @@ def fetch_data(interval, days=None):
             return df
             
         except Exception as e:
-            print(f"❌ خطا در دریافت {interval}: {e}")
+            print(f"❌ خطا: {e}")
             if attempt < max_retries - 1:
                 time.sleep(5)
             else:
@@ -136,8 +136,7 @@ def calculate_rsi(series, period=14):
     avg_gain = gain.ewm(alpha=1/period, adjust=False).mean()
     avg_loss = loss.ewm(alpha=1/period, adjust=False).mean()
     rs = avg_gain / avg_loss.replace(0, pd.NA)
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
+    return 100 - (100 / (1 + rs))
 
 def calculate_atr(df, period=14):
     high = df['high']
@@ -149,17 +148,37 @@ def calculate_atr(df, period=14):
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     return tr.rolling(period).mean()
 
+def calculate_adx(df, period=14):
+    """محاسبه شاخص قدرت روند ADX"""
+    high = df['high']
+    low = df['low']
+    close = df['close']
+    
+    plus_dm = high.diff()
+    minus_dm = low.diff()
+    plus_dm[plus_dm < 0] = 0
+    minus_dm[minus_dm > 0] = 0
+    
+    tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
+    atr = tr.rolling(period).mean()
+    
+    plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
+    minus_di = 100 * (abs(minus_dm).rolling(period).mean() / atr)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(period).mean()
+    return adx
+
 def add_indicators(df):
-    """اضافه کردن EMA, RSI, ATR به DataFrame"""
     df = df.copy()
     df['EMA20'] = calculate_ema(df['close'], 20)
     df['EMA50'] = calculate_ema(df['close'], 50)
     df['RSI'] = calculate_rsi(df['close'], 14)
     df['ATR'] = calculate_atr(df, 14)
+    df['ADX'] = calculate_adx(df, 14)
     return df
 
 # =========================================================
-# 🔍 تشخیص شکست ساختار (Break of Structure)
+# 🔍 تشخیص شکست ساختار (BOS)
 # =========================================================
 
 def detect_bos(df, lookback=None):
@@ -263,38 +282,31 @@ def near_resistance(df):
     return (distance <= max_dist, resistance)
 
 # =========================================================
-# 🧠 استراتژی اصلی
+# 🧠 استراتژی اصلی با ADX
 # =========================================================
 
 def analyze_signal(df5, df1):
-    """
-    تحلیل ترکیبی:
-    - df5: تایم‌فریم 5 دقیقه (روند و ساختار)
-    - df1: تایم‌فریم 1 دقیقه (ورود)
-    """
+    """تحلیل ترکیبی با فیلتر قدرت روند ADX"""
     
-    # آماده‌سازی داده‌ها
     df5 = add_indicators(df5)
     df1 = add_indicators(df1)
     
     if df5 is None or df1 is None or len(df5) < 30 or len(df1) < 30:
-        return {
-            "signal": "NO SIGNAL",
-            "reasons": ["داده کافی نیست"]
-        }
+        return {"signal": "NO SIGNAL", "reasons": ["داده کافی نیست"]}
     
-    # ========== استخراج داده‌های فعلی ==========
+    # ========== استخراج داده‌ها ==========
     last5 = df5.iloc[-1]
     last1 = df1.iloc[-1]
     
     price = float(last1['close'])
     rsi1 = float(last1['RSI'])
     atr1 = float(last1['ATR'])
+    adx = float(last5['ADX'])
     
     ema20_5 = float(last5['EMA20'])
     ema50_5 = float(last5['EMA50'])
     
-    # ========== 1. تشخیص روند در 5M ==========
+    # ========== 1. روند ==========
     if ema20_5 > ema50_5:
         trend = "BUY"
     elif ema20_5 < ema50_5:
@@ -302,17 +314,16 @@ def analyze_signal(df5, df1):
     else:
         trend = "NONE"
     
-    # ========== 2. شکست ساختار (BOS) ==========
+    # ========== 2. BOS ==========
     bos_signal, bos_level = detect_bos(df5)
     
-    # ========== 3. واگرایی RSI ==========
+    # ========== 3. واگرایی ==========
     divergence = detect_rsi_divergence(df5)
     
-    # ========== 4. فیبوناچی پولبک ==========
-    fib_pullback, fib_high, fib_low = calc_fib_pullback(df5)
+    # ========== 4. فیبوناچی ==========
+    fib_pullback, _, _ = calc_fib_pullback(df5)
     
-    # ========== 5. شرایط ورود 1M ==========
-    # RSI Reversal (خروج از اشباع)
+    # ========== 5. RSI Reversal ==========
     if len(df1) >= 3:
         rsi_prev = float(df1.iloc[-2]['RSI'])
         rsi_before = float(df1.iloc[-3]['RSI'])
@@ -332,37 +343,33 @@ def analyze_signal(df5, df1):
         rsi_buy_trigger = False
         rsi_sell_trigger = False
     
-    # کندل 1M
+    # ========== 6. کندل 1M ==========
     candle_bull = last1['close'] > last1['open']
     candle_bear = last1['close'] < last1['open']
     candle_strong = abs(last1['close'] - last1['open']) > atr1 * 0.3
     
-    # پشتیبانی/مقاومت
+    # ========== 7. پشتیبانی/مقاومت ==========
     near_sup, support = near_support(df1)
     near_res, resistance = near_resistance(df1)
     
-    # ========== 6. تحلیل خرید ==========
+    # ========== 8. تحلیل خرید ==========
     score_buy = 0
     reasons_buy = []
     
-    # روند
     if trend == "BUY":
         score_buy += 30
         reasons_buy.append("OK: 5M uptrend")
     else:
         reasons_buy.append("WAIT: 5M uptrend")
     
-    # BOS (اگر Early Entry فعال باشد)
     if CONFIG["EARLY_ENTRY"] and bos_signal == "BUY":
         score_buy += 25
         reasons_buy.append(f"EARLY: BOS BUY at {bos_level:.2f}")
     
-    # RSI Reversal
     if rsi_buy_trigger:
-        score_buy += 25
+        score_buy += 20
         reasons_buy.append("OK: RSI reversal from oversold")
     
-    # کندل
     if candle_bull and candle_strong:
         score_buy += 20
         reasons_buy.append("OK: strong bullish candle")
@@ -370,22 +377,27 @@ def analyze_signal(df5, df1):
         score_buy += 10
         reasons_buy.append("OK: bullish candle")
     
-    # پشتیبانی
     if near_sup:
         score_buy += 15
         reasons_buy.append(f"OK: near support {support:.2f}")
     
-    # واگرایی
     if divergence == "BULLISH":
         score_buy += 15
         reasons_buy.append("OK: RSI bullish divergence")
     
-    # فیبوناچی (پولبک زیاد = نزدیک به حمایت)
     if fib_pullback is not None and fib_pullback > (100 - CONFIG["FIB_EARLY_ZONE"]):
         score_buy += 10
         reasons_buy.append(f"OK: Fib pullback {fib_pullback:.1f}%")
     
-    # ========== 7. تحلیل فروش ==========
+    # ========== 🔥 فیلتر ADX برای خرید ==========
+    if adx > CONFIG["ADX_THRESHOLD"]:
+        score_buy += 10
+        reasons_buy.append(f"OK: ADX {adx:.1f} (trend strength)")
+        if adx > CONFIG["ADX_STRONG_THRESHOLD"]:
+            score_buy += 5
+            reasons_buy.append(f"🔥 ADX {adx:.1f} (strong trend)")
+    
+    # ========== 9. تحلیل فروش ==========
     score_sell = 0
     reasons_sell = []
     
@@ -400,7 +412,7 @@ def analyze_signal(df5, df1):
         reasons_sell.append(f"EARLY: BOS SELL at {bos_level:.2f}")
     
     if rsi_sell_trigger:
-        score_sell += 25
+        score_sell += 20
         reasons_sell.append("OK: RSI reversal from overbought")
     
     if candle_bear and candle_strong:
@@ -422,23 +434,31 @@ def analyze_signal(df5, df1):
         score_sell += 10
         reasons_sell.append(f"OK: Fib pullback {fib_pullback:.1f}%")
     
-    # ========== 8. تصمیم‌گیری نهایی ==========
+    # ========== 🔥 فیلتر ADX برای فروش ==========
+    if adx > CONFIG["ADX_THRESHOLD"]:
+        score_sell += 10
+        reasons_sell.append(f"OK: ADX {adx:.1f} (trend strength)")
+        if adx > CONFIG["ADX_STRONG_THRESHOLD"]:
+            score_sell += 5
+            reasons_sell.append(f"🔥 ADX {adx:.1f} (strong trend)")
+    
+    # ========== 10. تصمیم‌گیری نهایی ==========
     threshold_early = CONFIG["EARLY_SCORE_THRESHOLD"]
     threshold_normal = CONFIG["NORMAL_SCORE_THRESHOLD"]
     
-    # بررسی سیگنال فروش
+    # فروش
     if score_sell >= threshold_normal:
-        return create_result("SELL", score_sell, reasons_sell, price, rsi1, atr1, trend, "NORMAL")
+        return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "NORMAL")
     
     if CONFIG["EARLY_ENTRY"] and score_sell >= threshold_early and bos_signal == "SELL":
-        return create_result("SELL", score_sell, reasons_sell, price, rsi1, atr1, trend, "EARLY")
+        return create_result("SELL", score_sell, reasons_sell, price, rsi1, adx, trend, "EARLY")
     
-    # بررسی سیگنال خرید
+    # خرید
     if score_buy >= threshold_normal:
-        return create_result("BUY", score_buy, reasons_buy, price, rsi1, atr1, trend, "NORMAL")
+        return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "NORMAL")
     
     if CONFIG["EARLY_ENTRY"] and score_buy >= threshold_early and bos_signal == "BUY":
-        return create_result("BUY", score_buy, reasons_buy, price, rsi1, atr1, trend, "EARLY")
+        return create_result("BUY", score_buy, reasons_buy, price, rsi1, adx, trend, "EARLY")
     
     # بدون سیگنال
     return {
@@ -448,13 +468,14 @@ def analyze_signal(df5, df1):
         "price": price,
         "trend": trend,
         "rsi": rsi1,
+        "adx": adx,
         "fib_pullback": fib_pullback,
         "bos_signal": bos_signal,
         "divergence": divergence,
         "reasons": ["شرایط برقرار نیست"]
     }
 
-def create_result(signal, score, reasons, price, rsi, atr, trend, entry_type):
+def create_result(signal, score, reasons, price, rsi, adx, trend, entry_type):
     quality = "STRONG" if score >= 85 else "NORMAL" if score >= 70 else "WEAK"
     return {
         "signal": signal,
@@ -462,32 +483,27 @@ def create_result(signal, score, reasons, price, rsi, atr, trend, entry_type):
         "quality": quality,
         "price": price,
         "rsi": rsi,
-        "atr": atr,
+        "adx": adx,
         "trend": trend,
         "entry_type": entry_type,
         "reasons": [f"Score: {score}/100"] + reasons + [f"FINAL {signal} SIGNAL ({entry_type})"]
     }
 
 # =========================================================
-# 🚀 اجرای اصلی (برای تست مستقل)
+# 🚀 اجرا
 # =========================================================
 
 def main():
     print("=" * 60)
-    print("🧪 GOLDPRO+ CLEAN (EARLY ENTRY ENABLED)")
+    print("🧪 GOLDPRO+ CLEAN (با فیلتر ADX)")
     print("=" * 60)
     
-    print("📥 دریافت داده 5M...")
     df5 = fetch_data("5min")
-    print("📥 دریافت داده 1M...")
     df1 = fetch_data("1min", days=1)
     
     if df5 is None or df1 is None:
         print("❌ دریافت داده ناموفق")
         return
-    
-    print(f"📊 5M: {len(df5)} کندل")
-    print(f"📊 1M: {len(df1)} کندل")
     
     result = analyze_signal(df5, df1)
     
@@ -497,28 +513,22 @@ def main():
     
     if result['signal'] != "NO SIGNAL":
         emoji = "🔴" if result['signal'] == "SELL" else "🟢"
-        print(f"{emoji} {CONFIG['SYMBOL']} {result['signal']} SIGNAL ({result.get('entry_type', 'NORMAL')})")
+        print(f"{emoji} {CONFIG['SYMBOL']} {result['signal']} ({result.get('entry_type', 'NORMAL')})")
         print(f"💰 قیمت: {result['price']:.5f}")
         print(f"⭐ امتیاز: {result['score']}/100")
         print(f"🏷️ کیفیت: {result['quality']}")
-        print(f"📈 روند 5M: {result.get('trend', 'NONE')}")
-        print(f"📊 RSI 1M: {result.get('rsi', 0):.1f}")
+        print(f"📈 روند: {result.get('trend', 'NONE')}")
+        print(f"📊 RSI: {result.get('rsi', 0):.1f}")
+        print(f"📊 ADX: {result.get('adx', 0):.1f}")
         if result.get('fib_pullback'):
-            print(f"📐 فیبوناچی پولبک: {result['fib_pullback']:.1f}%")
+            print(f"📐 فیبوناچی: {result['fib_pullback']:.1f}%")
         print("\n📋 دلایل:")
         for r in result['reasons']:
             print(f"  • {r}")
     else:
         print("⚠️ هیچ سیگنالی یافت نشد.")
-        print(f"   روند 5M: {result.get('trend', 'NONE')}")
-        if result.get('fib_pullback'):
-            print(f"   فیبوناچی پولبک: {result['fib_pullback']:.1f}%")
-        if result.get('bos_signal'):
-            print(f"   شکست ساختار: {result['bos_signal']}")
-        if result.get('divergence'):
-            print(f"   واگرایی RSI: {result['divergence']}")
-        print("💡 پیشنهاد: EARLY_ENTRY=True (هم‌اکنون فعال است)")
-        print(f"   آستانه Early Entry: {CONFIG['EARLY_SCORE_THRESHOLD']}")
+        print(f"   ADX: {result.get('adx', 0):.1f}")
+        print(f"   BOS: {result.get('bos_signal', 'NONE')}")
     
     print("=" * 60)
 
