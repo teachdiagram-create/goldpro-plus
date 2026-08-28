@@ -2,11 +2,12 @@ import requests
 import os
 
 # =========================================================
-# تنظیمات تلگرام (از متغیرهای محیطی یا مستقیم)
+# تنظیمات تلگرام
 # =========================================================
 
-TELEGRAM_TOKEN = os.environ.get('8976953594:AAEY4NAFO1I2ps8KkLPDft2PCl0B2xoZ5qU', 'YOUR_BOT_TOKEN_HERE')
-TELEGRAM_CHAT_ID = os.environ.get('100881313', 'YOUR_CHAT_ID_HERE')
+# ✅ اصلاح: توکن و چت‌آیدی مستقیماً یا از متغیر محیطی
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '8976953594:AAEY4NAFO1I2ps8KkLPDft2PCl0B2xoZ5qU')
+TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', '100881313')
 
 # =========================================================
 # ارسال پیام به تلگرام
@@ -18,11 +19,11 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
     """
     if signal_data is None:
         return
-    
+
     if signal_data.get('signal') == "NO SIGNAL":
         print(f"⏳ {strategy_name}: No signal to send")
         return
-    
+
     # ایموجی based on signal type
     if signal_data['signal'] == "SELL":
         emoji = "🔴"
@@ -30,7 +31,7 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
         emoji = "🟢"
     else:
         emoji = "⚪"
-    
+
     # ساخت پیام
     message = f"""{emoji} <b>{strategy_name}</b> {signal_data['signal']} SIGNAL
 
@@ -53,11 +54,11 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
             message += f"  • {r}\n"
     else:
         message += f"  • {reasons}\n"
-    
+
     # اضافه کردن زمان
     if signal_data.get('time'):
         message += f"\n⏰ {signal_data.get('time')}"
-    
+
     # ارسال به تلگرام
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
@@ -65,7 +66,7 @@ def send_signal(signal_data, strategy_name="GOLDPRO+"):
         "text": message,
         "parse_mode": "HTML"
     }
-    
+
     try:
         response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 200:
