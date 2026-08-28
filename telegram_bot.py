@@ -5,8 +5,8 @@ import os
 # تنظیمات تلگرام (از متغیرهای محیطی یا مستقیم)
 # =========================================================
 
-TELEGRAM_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-TELEGRAM_CHAT_ID = os.environ.get('TELEGRAM_CHAT_ID', 'YOUR_CHAT_ID_HERE')
+TELEGRAM_TOKEN = os.environ.get('8976953594:AAEY4NAFO1I2ps8KkLPDft2PCl0B2xoZ5qU', 'YOUR_BOT_TOKEN_HERE')
+TELEGRAM_CHAT_ID = os.environ.get('100881313', 'YOUR_CHAT_ID_HERE')
 
 # =========================================================
 # ارسال پیام به تلگرام
