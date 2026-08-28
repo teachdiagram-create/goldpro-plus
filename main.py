@@ -1,13 +1,13 @@
 """
 GoldPro+ Parallel Strategy Runner
 اجرای همزمان استراتژی‌های PLUS و CLEAN
+هر استراتژی داده‌های خود را جداگانه دریافت می‌کند
 """
 
 import time
 import sys
 import os
 
-# اضافه کردن مسیر فعلی به PATH (برای اطمینان از import)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # =========================================================
@@ -57,49 +57,48 @@ def main_loop():
             print("\n" + "-" * 40)
             print(f"⏰ {time.strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # ========== دریافت داده (برای CLEAN) ==========
-            df5 = None
-            df1 = None
-            
-            if analyze_signal is not None:
-                print("📥 دریافت داده برای CLEAN...")
-                df5 = fetch_data("5min")
-                df1 = fetch_data("1min", days=1)
-                
-                if df5 is None or df1 is None:
-                    print("⚠️ داده در دسترس نیست، ۱۰ ثانیه صبر...")
-                    time.sleep(10)
-                    continue
-            
-            # ========== استراتژی ۱: PLUS ==========
-            if generate_goldpro_plus_signal is not None and df5 is not None and df1 is not None:
-                print("\n🧠 [PLUS] Analyzing...")
+            # ===== استراتژی PLUS =====
+            if generate_goldpro_plus_signal is not None:
                 try:
-                    signal_plus = generate_goldpro_plus_signal(df5, df1)
-                    if signal_plus and signal_plus.get('signal') != "NO SIGNAL":
-                        print(f"✅ [PLUS] Signal: {signal_plus['signal']} at {signal_plus.get('price', 0):.2f}")
-                        send_signal(signal_plus, strategy_name="GOLDPRO+ (PLUS)")
+                    print("\n🧠 [PLUS] Getting data...")
+                    df5_plus = fetch_data("5min")
+                    df1_plus = fetch_data("1min", days=1)
+                    
+                    if df5_plus is not None and df1_plus is not None:
+                        print("🧠 [PLUS] Analyzing...")
+                        signal_plus = generate_goldpro_plus_signal(df5_plus, df1_plus)
+                        if signal_plus and signal_plus.get('signal') != "NO SIGNAL":
+                            print(f"✅ [PLUS] Signal: {signal_plus['signal']} at {signal_plus.get('price', 0):.2f}")
+                            send_signal(signal_plus, strategy_name="GOLDPRO+ (PLUS)")
+                        else:
+                            score = signal_plus.get('score', 0) if signal_plus else 0
+                            print(f"⏳ [PLUS] No signal (Score: {score})")
                     else:
-                        score = signal_plus.get('score', 0) if signal_plus else 0
-                        print(f"⏳ [PLUS] No signal (Score: {score})")
+                        print("⚠️ [PLUS] No data available")
                 except Exception as e:
                     print(f"❌ [PLUS] Error: {e}")
             
-            # ========== استراتژی ۲: CLEAN ==========
-            if analyze_signal is not None and df5 is not None and df1 is not None:
-                print("\n🧠 [CLEAN] Analyzing...")
+            # ===== استراتژی CLEAN =====
+            if analyze_signal is not None:
                 try:
-                    signal_clean = analyze_signal(df5, df1)
-                    if signal_clean and signal_clean.get('signal') != "NO SIGNAL":
-                        print(f"✅ [CLEAN] Signal: {signal_clean['signal']} at {signal_clean.get('price', 0):.2f}")
-                        send_signal(signal_clean, strategy_name="GOLDPRO+ (CLEAN)")
+                    print("\n🧠 [CLEAN] Getting data...")
+                    df5_clean = fetch_data("5min")
+                    df1_clean = fetch_data("1min", days=1)
+                    
+                    if df5_clean is not None and df1_clean is not None:
+                        print("🧠 [CLEAN] Analyzing...")
+                        signal_clean = analyze_signal(df5_clean, df1_clean)
+                        if signal_clean and signal_clean.get('signal') != "NO SIGNAL":
+                            print(f"✅ [CLEAN] Signal: {signal_clean['signal']} at {signal_clean.get('price', 0):.2f}")
+                            send_signal(signal_clean, strategy_name="GOLDPRO+ (CLEAN)")
+                        else:
+                            score = signal_clean.get('score', 0) if signal_clean else 0
+                            print(f"⏳ [CLEAN] No signal (Score: {score})")
                     else:
-                        score = signal_clean.get('score', 0) if signal_clean else 0
-                        print(f"⏳ [CLEAN] No signal (Score: {score})")
+                        print("⚠️ [CLEAN] No data available")
                 except Exception as e:
                     print(f"❌ [CLEAN] Error: {e}")
             
-            # ========== انتظار ==========
             print(f"\n⏳ Next check in {CHECK_INTERVAL} seconds...")
             time.sleep(CHECK_INTERVAL)
             
