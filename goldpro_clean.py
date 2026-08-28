@@ -18,29 +18,23 @@ CONFIG = {
     "SYMBOL": "XAU/USD",
     "DAYS_BACK": 3,
     
-    # Early Entry
     "EARLY_ENTRY": True,
-    "BOS_LOOKBACK": 6,
+    "BOS_LOOKBACK": 5,                 # کاهش به ۵ (حساس‌تر در بازار رنج)
     "EARLY_SCORE_THRESHOLD": 55,
     "NORMAL_SCORE_THRESHOLD": 70,
     
-    # RSI
-    "RSI_OVERSOLD": 40,
-    "RSI_OVERBOUGHT": 60,
+    "RSI_OVERSOLD": 35,                # کاهش به ۳۵
+    "RSI_OVERBOUGHT": 55,              # کاهش به ۵۵
     
-    # ADX
     "ADX_THRESHOLD": 20,
     "ADX_STRONG_THRESHOLD": 35,
     
-    # فیبوناچی
     "FIB_LOOKBACK": 50,
-    "FIB_EARLY_ZONE": 50,
+    "FIB_EARLY_ZONE": 65,              # افزایش به ۶۵ (پولبک‌های بیشتر پذیرفته شوند)
     
-    # پشتیبانی/مقاومت
     "SR_LOOKBACK": 20,
     "SR_ATR_DISTANCE": 1.0,
 }
-
 # =========================================================
 # 📥 دریافت داده
 # =========================================================
