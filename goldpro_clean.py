@@ -12,31 +12,30 @@ import time
 # =========================================================
 # 📌 تنظیمات
 # =========================================================
-
 CONFIG = {
     "API_KEY": os.environ.get('TWELVE_DATA_API_KEY', 'YOUR_API_KEY_HERE'),
     "SYMBOL": "XAU/USD",
     "DAYS_BACK": 3,
     
-    # Early Entry
+    # ===== تغییرات اصلی =====
     "EARLY_ENTRY": True,
-    "BOS_LOOKBACK": 8,
-    "EARLY_SCORE_THRESHOLD": 60,
+    "BOS_LOOKBACK": 6,                 # کاهش از ۸ به ۶ (حساس‌تر)
+    "EARLY_SCORE_THRESHOLD": 55,       # کاهش از ۶۰ به ۵۵ (همان امتیاز فعلی)
     "NORMAL_SCORE_THRESHOLD": 70,
     
-    # RSI
-    "RSI_OVERSOLD": 35,
-    "RSI_OVERBOUGHT": 65,
+    # ===== تنظیمات RSI (برای فعال‌سازی زودتر) =====
+    "RSI_OVERSOLD": 40,                # افزایش از ۳۵ به ۴۰
+    "RSI_OVERBOUGHT": 60,              # کاهش از ۶۵ به ۶۰
     
-    # ADX (قدرت روند)
-    "ADX_THRESHOLD": 25,
-    "ADX_STRONG_THRESHOLD": 40,
+    # ===== تنظیمات ADX =====
+    "ADX_THRESHOLD": 20,               # کاهش از ۲۵ به ۲۰
+    "ADX_STRONG_THRESHOLD": 35,        # کاهش از ۴۰ به ۳۵
     
-    # فیبوناچی
+    # ===== فیبوناچی =====
     "FIB_LOOKBACK": 50,
-    "FIB_EARLY_ZONE": 38.2,
+    "FIB_EARLY_ZONE": 50,              # افزایش از ۳۸.۲ به ۵۰
     
-    # پشتیبانی/مقاومت
+    # ===== پشتیبانی/مقاومت =====
     "SR_LOOKBACK": 20,
     "SR_ATR_DISTANCE": 1.0,
 }
